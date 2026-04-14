@@ -1,0 +1,29 @@
+{
+  "name": "sentinel-backend",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "npx ts-node server.ts",
+    "build": "npx tsc",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "*",
+    "@drift-labs/sdk": "*",
+    "@pythnetwork/hermes-client": "*",
+    "@solana/web3.js": "*",
+    "axios": "*",
+    "cors": "^2.8.6",
+    "dotenv": "*",
+    "express": "*",
+    "node-cron": "*",
+    "ws": "*"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "*",
+    "@types/node": "*",
+    "@types/ws": "*",
+    "ts-node": "*",
+    "typescript": "*"
+  }
+}

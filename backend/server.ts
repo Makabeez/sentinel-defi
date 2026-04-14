@@ -1,0 +1,545 @@
+import express from 'express';
+import { WebSocketServer, WebSocket } from 'ws';
+import axios from 'axios';
+import dotenv from 'dotenv';
+import cors from 'cors';
+import { Connection, PublicKey } from '@solana/web3.js';
+
+dotenv.config({ path: '/opt/sentinel/.env' });
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+const PORT = parseInt(process.env.PORT || '8080');
+const WS_PORT = parseInt(process.env.WS_PORT || '8081');
+const RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+
+// ============================================
+// PROTOCOL REGISTRY — protocols we monitor
+// ============================================
+const PROTOCOLS: Protocol[] = [
+  {
+    id: 'kamino',
+    name: 'Kamino Finance',
+    type: 'lending',
+    programId: 'KLend2g3cP87ber8vVKTFotQYkqGR2rBZqydXgSF3M6',
+    tvlApi: 'https://api.llama.fi/tvl/kamino',
+    color: '#FF6B35',
+  },
+  {
+    id: 'marginfi',
+    name: 'MarginFi',
+    type: 'lending',
+    programId: 'MFv2hWf31Z9kbCa1snEPYctwafyhdJB7oS7qJRXYHne',
+    tvlApi: 'https://api.llama.fi/tvl/marginfi',
+    color: '#DCE775',
+  },
+  {
+    id: 'solend',
+    name: 'Solend',
+    type: 'lending',
+    programId: 'So1endDq2YkqhipRh3WViPa8hFSq6z6jK3JAqp9nh6D',
+    tvlApi: 'https://api.llama.fi/tvl/solend',
+    color: '#7C4DFF',
+  },
+  {
+    id: 'jupiter-lend',
+    name: 'Jupiter Lend',
+    type: 'lending',
+    programId: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',
+    tvlApi: 'https://api.llama.fi/tvl/jupiter-lend',
+    color: '#00BFA5',
+  },
+  {
+    id: 'drift',
+    name: 'Drift Protocol',
+    type: 'perp-dex',
+    programId: 'dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH',
+    tvlApi: 'https://api.llama.fi/tvl/drift',
+    color: '#E040FB',
+    status: 'frozen', // post-hack
+  },
+];
+
+// ============================================
+// TYPES
+// ============================================
+interface Protocol {
+  id: string;
+  name: string;
+  type: string;
+  programId: string;
+  tvlApi: string;
+  color: string;
+  status?: string;
+}
+
+interface TVLSnapshot {
+  protocol: string;
+  tvl: number;
+  timestamp: number;
+  change1h: number;
+  change24h: number;
+}
+
+interface Alert {
+  id: string;
+  timestamp: number;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  type: string;
+  protocol: string;
+  title: string;
+  description: string;
+  data?: any;
+}
+
+interface OracleStatus {
+  symbol: string;
+  price: number;
+  confidence: number;
+  publishTime: number;
+  deviationFromTwap: number;
+  status: 'healthy' | 'stale' | 'deviated' | 'error';
+}
+
+// ============================================
+// STATE
+// ============================================
+const tvlHistory: Map<string, TVLSnapshot[]> = new Map();
+const alerts: Alert[] = [];
+const oracleStatus: Map<string, OracleStatus> = new Map();
+let protocolHealth: Map<string, any> = new Map();
+
+// Pyth price feed IDs (mainnet)
+const PYTH_FEEDS: Record<string, string> = {
+  'SOL/USD': '0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d',
+  'BTC/USD': '0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43',
+  'ETH/USD': '0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace',
+  'USDC/USD': '0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a',
+  'JUP/USD': '0x0a0408d619e9380abad35060f9192039ed5042fa6f82301d0e48bb52be830996',
+};
+
+const PYTH_TWAP: Map<string, number[]> = new Map();
+
+// ============================================
+// SOLANA CONNECTION
+// ============================================
+const connection = new Connection(RPC_URL, 'confirmed');
+
+// ============================================
+// TVL MONITORING (DefiLlama)
+// ============================================
+async function fetchTVL(protocol: Protocol): Promise<number | null> {
+  try {
+    const resp = await axios.get(protocol.tvlApi, { timeout: 10000 });
+    return typeof resp.data === 'number' ? resp.data : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchAllTVLs(): Promise<void> {
+  const now = Date.now();
+  for (const proto of PROTOCOLS) {
+    const tvl = await fetchTVL(proto);
+    if (tvl === null) continue;
+
+    const history = tvlHistory.get(proto.id) || [];
+    const prev1h = history.find(s => now - s.timestamp > 3600000 && now - s.timestamp < 7200000);
+    const prev24h = history.find(s => now - s.timestamp > 86400000 && now - s.timestamp < 90000000);
+
+    const snapshot: TVLSnapshot = {
+      protocol: proto.id,
+      tvl,
+      timestamp: now,
+      change1h: prev1h ? ((tvl - prev1h.tvl) / prev1h.tvl) * 100 : 0,
+      change24h: prev24h ? ((tvl - prev24h.tvl) / prev24h.tvl) * 100 : 0,
+    };
+
+    history.push(snapshot);
+    // Keep 48h of data
+    const cutoff = now - 48 * 3600000;
+    const trimmed = history.filter(s => s.timestamp > cutoff);
+    tvlHistory.set(proto.id, trimmed);
+
+    // ANOMALY: TVL drop > 10% in 1h
+    if (snapshot.change1h < -10) {
+      pushAlert({
+        severity: 'critical',
+        type: 'tvl_crash',
+        protocol: proto.id,
+        title: `${proto.name} TVL crashed ${snapshot.change1h.toFixed(1)}% in 1h`,
+        description: `TVL dropped from $${prev1h?.tvl.toLocaleString()} to $${tvl.toLocaleString()}. Possible exploit or mass withdrawal.`,
+        data: snapshot,
+      });
+    } else if (snapshot.change1h < -5) {
+      pushAlert({
+        severity: 'high',
+        type: 'tvl_drop',
+        protocol: proto.id,
+        title: `${proto.name} TVL down ${snapshot.change1h.toFixed(1)}% in 1h`,
+        description: `Significant outflow detected. Current TVL: $${tvl.toLocaleString()}.`,
+        data: snapshot,
+      });
+    }
+  }
+}
+
+// ============================================
+// PYTH ORACLE MONITORING
+// ============================================
+async function fetchPythPrices(): Promise<void> {
+  try {
+    const ids = Object.values(PYTH_FEEDS);
+    const resp = await axios.get('https://hermes.pyth.network/v2/updates/price/latest', {
+      params: { ids },
+      timeout: 10000,
+    });
+
+    const parsed = resp.data?.parsed || [];
+    const symbols = Object.keys(PYTH_FEEDS);
+
+    for (let i = 0; i < parsed.length; i++) {
+      const p = parsed[i]?.price;
+      if (!p) continue;
+
+      const symbol = symbols[i];
+      const price = parseFloat(p.price) * Math.pow(10, p.expo);
+      const confidence = parseFloat(p.conf) * Math.pow(10, p.expo);
+      const publishTime = parsed[i].price.publish_time;
+
+      // TWAP tracking (5min window)
+      const twapKey = symbol;
+      const twapArr = PYTH_TWAP.get(twapKey) || [];
+      twapArr.push(price);
+      if (twapArr.length > 30) twapArr.shift(); // ~5min at 10s intervals
+      PYTH_TWAP.set(twapKey, twapArr);
+
+      const twapAvg = twapArr.reduce((a, b) => a + b, 0) / twapArr.length;
+      const deviationFromTwap = ((price - twapAvg) / twapAvg) * 100;
+
+      const isStale = Date.now() / 1000 - publishTime > 60;
+      const isDeviated = Math.abs(deviationFromTwap) > 5;
+
+      let status: OracleStatus['status'] = 'healthy';
+      if (isStale) status = 'stale';
+      if (isDeviated) status = 'deviated';
+
+      const oracleData: OracleStatus = {
+        symbol,
+        price,
+        confidence,
+        publishTime,
+        deviationFromTwap,
+        status,
+      };
+
+      oracleStatus.set(symbol, oracleData);
+
+      // ANOMALY: Oracle deviation > 5% from TWAP
+      if (isDeviated && twapArr.length > 10) {
+        pushAlert({
+          severity: 'critical',
+          type: 'oracle_deviation',
+          protocol: 'system',
+          title: `${symbol} oracle deviated ${deviationFromTwap.toFixed(2)}% from TWAP`,
+          description: `Current: $${price.toFixed(4)} | TWAP(5m): $${twapAvg.toFixed(4)}. Potential oracle manipulation or flash crash.`,
+          data: oracleData,
+        });
+      }
+
+      // ANOMALY: Stale oracle
+      if (isStale) {
+        pushAlert({
+          severity: 'high',
+          type: 'oracle_stale',
+          protocol: 'system',
+          title: `${symbol} oracle is stale (${Math.round(Date.now() / 1000 - publishTime)}s old)`,
+          description: `Price feed hasn't updated in over 60 seconds. Liquidation engines may be using outdated data.`,
+          data: oracleData,
+        });
+      }
+    }
+  } catch (err: any) {
+    console.error('Pyth fetch error:', err.message);
+  }
+}
+
+// ============================================
+// SOLANA ACCOUNT MONITORING
+// ============================================
+async function monitorLargeTransfers(): Promise<void> {
+  try {
+    // Monitor recent signatures for protocol program IDs
+    for (const proto of PROTOCOLS.filter(p => p.status !== 'frozen')) {
+      const pubkey = new PublicKey(proto.programId);
+      const sigs = await connection.getSignaturesForAddress(pubkey, { limit: 5 });
+
+      for (const sig of sigs) {
+        if (sig.err) continue;
+
+        const tx = await connection.getTransaction(sig.signature, {
+          maxSupportedTransactionVersion: 0,
+        });
+
+        if (!tx?.meta) continue;
+
+        // Check for large SOL balance changes (> 1000 SOL)
+        const preBalances = tx.meta.preBalances;
+        const postBalances = tx.meta.postBalances;
+
+        for (let i = 0; i < preBalances.length; i++) {
+          const diff = Math.abs(postBalances[i] - preBalances[i]) / 1e9;
+          if (diff > 1000) {
+            pushAlert({
+              severity: 'medium',
+              type: 'large_transfer',
+              protocol: proto.id,
+              title: `Large transfer on ${proto.name}: ${diff.toFixed(0)} SOL`,
+              description: `Transaction ${sig.signature.slice(0, 16)}... moved ${diff.toFixed(2)} SOL.`,
+              data: { signature: sig.signature, amount: diff },
+            });
+          }
+        }
+      }
+    }
+  } catch (err: any) {
+    console.error('Transfer monitor error:', err.message);
+  }
+}
+
+// ============================================
+// CEX FUNDING RATE SIGNALS
+// ============================================
+async function fetchFundingRates(): Promise<any> {
+  try {
+    const [binanceResp, bybitResp] = await Promise.allSettled([
+      axios.get('https://fapi.binance.com/fapi/v1/premiumIndex', {
+        params: { symbol: 'SOLUSDT' },
+        timeout: 5000,
+      }),
+      axios.get('https://api.bybit.com/v5/market/tickers', {
+        params: { category: 'linear', symbol: 'SOLUSDT' },
+        timeout: 5000,
+      }),
+    ]);
+
+    const binanceFR = binanceResp.status === 'fulfilled'
+      ? parseFloat(binanceResp.value.data.lastFundingRate)
+      : null;
+
+    const bybitFR = bybitResp.status === 'fulfilled'
+      ? parseFloat(bybitResp.value.data.result?.list?.[0]?.fundingRate || '0')
+      : null;
+
+    const rates = { binance: binanceFR, bybit: bybitFR, timestamp: Date.now() };
+
+    // ANOMALY: Extreme funding rate (> 0.1% per 8h = very bullish/bearish)
+    if (binanceFR !== null && Math.abs(binanceFR) > 0.001) {
+      const direction = binanceFR > 0 ? 'LONG-heavy' : 'SHORT-heavy';
+      pushAlert({
+        severity: 'medium',
+        type: 'funding_extreme',
+        protocol: 'cex',
+        title: `SOL funding rate extreme: ${(binanceFR * 100).toFixed(4)}% (${direction})`,
+        description: `High funding = crowded positioning. Liquidation cascade risk elevated. Binance: ${(binanceFR * 100).toFixed(4)}%${bybitFR ? `, Bybit: ${(bybitFR * 100).toFixed(4)}%` : ''}.`,
+        data: rates,
+      });
+    }
+
+    return rates;
+  } catch (err: any) {
+    console.error('Funding rate error:', err.message);
+    return null;
+  }
+}
+
+// ============================================
+// CASCADE RISK SCORING
+// ============================================
+function computeCascadeRisk(): any {
+  const scores: Record<string, number> = {};
+
+  for (const proto of PROTOCOLS) {
+    let score = 0;
+    const snapshots = tvlHistory.get(proto.id) || [];
+    const latest = snapshots[snapshots.length - 1];
+
+    if (latest) {
+      if (latest.change1h < -5) score += 30;
+      else if (latest.change1h < -2) score += 10;
+      if (latest.change24h < -10) score += 20;
+    }
+
+    // Oracle health contributes to all protocols
+    for (const [, oracle] of oracleStatus) {
+      if (oracle.status === 'deviated') score += 25;
+      if (oracle.status === 'stale') score += 15;
+    }
+
+    if (proto.status === 'frozen') score += 40;
+
+    scores[proto.id] = Math.min(100, score);
+  }
+
+  // System-wide cascade score
+  const avgScore = Object.values(scores).reduce((a, b) => a + b, 0) / Object.values(scores).length;
+  const maxScore = Math.max(...Object.values(scores));
+
+  return {
+    protocols: scores,
+    systemAvg: avgScore,
+    systemMax: maxScore,
+    level: maxScore > 70 ? 'critical' : maxScore > 40 ? 'elevated' : maxScore > 20 ? 'moderate' : 'low',
+    timestamp: Date.now(),
+  };
+}
+
+// ============================================
+// ALERT SYSTEM
+// ============================================
+function pushAlert(partial: Omit<Alert, 'id' | 'timestamp'>): void {
+  // Deduplicate: don't push same type+protocol within 5 min
+  const recent = alerts.find(
+    a => a.type === partial.type && a.protocol === partial.protocol && Date.now() - a.timestamp < 300000
+  );
+  if (recent) return;
+
+  const alert: Alert = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    timestamp: Date.now(),
+    ...partial,
+  };
+
+  alerts.unshift(alert);
+  if (alerts.length > 500) alerts.length = 500;
+
+  // Broadcast to WebSocket clients
+  broadcast({ type: 'alert', data: alert });
+
+  console.log(`[ALERT][${alert.severity.toUpperCase()}] ${alert.title}`);
+}
+
+// ============================================
+// WEBSOCKET SERVER
+// ============================================
+const wss = new WebSocketServer({ port: WS_PORT });
+const clients: Set<WebSocket> = new Set();
+
+wss.on('connection', (ws) => {
+  clients.add(ws);
+  console.log(`WS client connected (${clients.size} total)`);
+
+  // Send current state on connect
+  ws.send(JSON.stringify({
+    type: 'init',
+    data: {
+      protocols: PROTOCOLS,
+      tvl: Object.fromEntries(tvlHistory),
+      alerts: alerts.slice(0, 50),
+      oracles: Object.fromEntries(oracleStatus),
+      cascadeRisk: computeCascadeRisk(),
+    },
+  }));
+
+  ws.on('close', () => {
+    clients.delete(ws);
+    console.log(`WS client disconnected (${clients.size} total)`);
+  });
+});
+
+function broadcast(message: any): void {
+  const data = JSON.stringify(message);
+  for (const client of clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(data);
+    }
+  }
+}
+
+// ============================================
+// POLLING LOOPS
+// ============================================
+async function runMonitoringLoop(): Promise<void> {
+  console.log('[SENTINEL] Starting monitoring loop...');
+
+  // Initial fetch
+  await fetchAllTVLs();
+  await fetchPythPrices();
+  await fetchFundingRates();
+
+  // TVL: every 5 minutes
+  setInterval(async () => {
+    await fetchAllTVLs();
+    broadcast({ type: 'tvl', data: Object.fromEntries(tvlHistory) });
+  }, 5 * 60 * 1000);
+
+  // Oracle prices: every 10 seconds
+  setInterval(async () => {
+    await fetchPythPrices();
+    broadcast({ type: 'oracles', data: Object.fromEntries(oracleStatus) });
+  }, 10 * 1000);
+
+  // Funding rates: every 60 seconds
+  setInterval(async () => {
+    const rates = await fetchFundingRates();
+    if (rates) broadcast({ type: 'funding', data: rates });
+  }, 60 * 1000);
+
+  // Large transfer monitor: every 30 seconds
+  setInterval(async () => {
+    await monitorLargeTransfers();
+  }, 30 * 1000);
+
+  // Cascade risk: every 60 seconds
+  setInterval(() => {
+    const risk = computeCascadeRisk();
+    broadcast({ type: 'cascadeRisk', data: risk });
+  }, 60 * 1000);
+}
+
+// ============================================
+// REST API
+// ============================================
+app.get('/api/health', (_, res) => {
+  res.json({ status: 'ok', uptime: process.uptime(), clients: clients.size });
+});
+
+app.get('/api/protocols', (_, res) => {
+  res.json(PROTOCOLS);
+});
+
+app.get('/api/tvl', (_, res) => {
+  res.json(Object.fromEntries(tvlHistory));
+});
+
+app.get('/api/alerts', (req, res) => {
+  const limit = parseInt(req.query.limit as string) || 50;
+  const severity = req.query.severity as string;
+  let filtered = alerts;
+  if (severity) filtered = filtered.filter(a => a.severity === severity);
+  res.json(filtered.slice(0, limit));
+});
+
+app.get('/api/oracles', (_, res) => {
+  res.json(Object.fromEntries(oracleStatus));
+});
+
+app.get('/api/cascade-risk', (_, res) => {
+  res.json(computeCascadeRisk());
+});
+
+app.get('/api/funding', async (_, res) => {
+  const rates = await fetchFundingRates();
+  res.json(rates);
+});
+
+// ============================================
+// START
+// ============================================
+app.listen(PORT, () => {
+  console.log(`[SENTINEL] REST API on :${PORT}`);
+  console.log(`[SENTINEL] WebSocket on :${WS_PORT}`);
+  runMonitoringLoop();
+});
