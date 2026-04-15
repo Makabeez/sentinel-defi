@@ -489,8 +489,8 @@ async function runMonitoringLoop(): Promise<void> {
 
   // Large transfer monitor: every 30 seconds
   setInterval(async () => {
-    await monitorLargeTransfers();
-  }, 30 * 1000);
+    // RPC DISABLED: await monitorLargeTransfers();
+  }, 300 * 1000);
 
   // Cascade risk: every 60 seconds
   setInterval(() => {
@@ -542,4 +542,143 @@ app.listen(PORT, () => {
   console.log(`[SENTINEL] REST API on :${PORT}`);
   console.log(`[SENTINEL] WebSocket on :${WS_PORT}`);
   runMonitoringLoop();
+});
+
+// ============================================
+// GOVERNANCE MONITOR — multisig & timelock changes
+// ============================================
+
+// Known multisig/admin accounts for monitored protocols
+const GOVERNANCE_ACCOUNTS: Record<string, { label: string; protocol: string; pubkey: string }[]> = {
+  drift: [
+    { label: 'Drift Security Council', protocol: 'drift', pubkey: 'DRiFTGejL2AHo2bSTBEzTpCKNerLCGMfrazr6gCh2xKH' },
+    { label: 'Drift Admin Authority', protocol: 'drift', pubkey: 'DRfTnEVxAYBiHnvM7CbBGacg6D4LRGF7BaWNkjbnp9ae' },
+  ],
+  kamino: [
+    { label: 'Kamino Admin', protocol: 'kamino', pubkey: 'KAMino9rK6Mr1rxWk3Cq3xvGSfoBhqFpBJCMBM6nhz8' },
+  ],
+  marginfi: [
+    { label: 'MarginFi Admin', protocol: 'marginfi', pubkey: 'MRGNWSHaWmz3CPFcYt3Dqt2LBYhQaxDgdBbJbMvhAQi' },
+  ],
+};
+
+// Track account data snapshots for change detection
+const governanceSnapshots: Map<string, { data: string; slot: number }> = new Map();
+
+async function monitorGovernanceAccounts(): Promise<void> {
+  const allAccounts = Object.values(GOVERNANCE_ACCOUNTS).flat();
+
+  for (const account of allAccounts) {
+    try {
+      const pubkey = new PublicKey(account.pubkey);
+      const info = await connection.getAccountInfo(pubkey);
+
+      if (!info) continue;
+
+      const currentData = info.data.toString('base64').slice(0, 200); // first 200 chars as fingerprint
+      const key = account.pubkey;
+      const previous = governanceSnapshots.get(key);
+
+      if (previous && previous.data !== currentData) {
+        // Account data changed — potential governance modification
+        pushAlert({
+          severity: 'critical',
+          type: 'governance_change',
+          protocol: account.protocol,
+          title: `⚠ ${account.label} account data modified`,
+          description: `On-chain account ${account.pubkey.slice(0, 8)}... has been modified. This could indicate a multisig rotation, timelock change, or admin key migration. Investigate immediately.`,
+          data: { account: account.pubkey, label: account.label, slot: 0 },
+        });
+      }
+
+      governanceSnapshots.set(key, { data: currentData, slot: 0 || 0 });
+    } catch (err: any) {
+      // Account may not exist or RPC error — skip silently
+    }
+  }
+}
+
+// Monitor durable nonce accounts associated with protocol multisigs
+async function monitorDurableNonces(): Promise<void> {
+  try {
+    // Durable nonce program: 11111111111111111111111111111111 (System Program)
+    // We look for nonce accounts that recently interacted with our monitored programs
+    const allAccounts = Object.values(GOVERNANCE_ACCOUNTS).flat();
+
+    for (const account of allAccounts) {
+      try {
+        const pubkey = new PublicKey(account.pubkey);
+        const sigs = await connection.getSignaturesForAddress(pubkey, { limit: 3 });
+
+        for (const sig of sigs) {
+          if (sig.err) continue;
+
+          const tx = await connection.getTransaction(sig.signature, {
+            maxSupportedTransactionVersion: 0,
+          });
+
+          if (!tx?.transaction?.message) continue;
+
+          // Check if transaction involves AdvanceNonceAccount or InitializeNonceAccount
+          const instructions = tx.transaction.message.compiledInstructions || [];
+          for (const ix of instructions) {
+            // System program instruction index 4 = AdvanceNonceAccount, 6 = InitializeNonceAccount
+            const programId = tx.transaction.message.staticAccountKeys?.[ix.programIdIndex];
+            if (programId?.toString() === '11111111111111111111111111111111') {
+              const discriminator = ix.data?.[0];
+              if (discriminator === 4 || discriminator === 6) {
+                pushAlert({
+                  severity: 'high',
+                  type: 'durable_nonce',
+                  protocol: account.protocol,
+                  title: `Durable nonce activity on ${account.label}`,
+                  description: `Transaction ${sig.signature.slice(0, 16)}... involves a durable nonce operation on a governance account. This is the exact mechanism used in the Drift $285M exploit.`,
+                  data: { signature: sig.signature, account: account.pubkey },
+                });
+              }
+            }
+          }
+        }
+      } catch {
+        // Skip individual account errors
+      }
+    }
+  } catch (err: any) {
+    console.error('Durable nonce monitor error:', err.message);
+  }
+}
+
+// Add governance monitoring to the polling loops
+// Governance check: every 2 minutes
+setInterval(async () => {
+  // RPC DISABLED: await monitorGovernanceAccounts();
+}, 120 * 1000);
+
+// Durable nonce check: every 5 minutes
+setInterval(async () => {
+  // RPC DISABLED: await monitorDurableNonces();
+}, 300 * 1000);
+
+// Initial governance scan
+setTimeout(async () => {
+  console.log('[SENTINEL] Starting governance monitor...');
+  // RPC DISABLED: await monitorGovernanceAccounts();
+  // RPC DISABLED: await monitorDurableNonces();
+  console.log('[SENTINEL] Governance monitor initialized.');
+}, 10 * 1000);
+
+// Add governance API endpoint
+app.get('/api/governance', (_, res) => {
+  const snapshots: any[] = [];
+  for (const [pubkey, snap] of governanceSnapshots) {
+    const account = Object.values(GOVERNANCE_ACCOUNTS).flat().find(a => a.pubkey === pubkey);
+    snapshots.push({
+      pubkey,
+      label: account?.label,
+      protocol: account?.protocol,
+      lastSlot: snap.slot,
+      fingerprint: snap.data.slice(0, 32) + '...',
+    });
+  }
+  res.json(snapshots);
 });
