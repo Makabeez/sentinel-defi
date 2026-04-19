@@ -144,11 +144,11 @@ async function fetchAllTVLs() {
 async function fetchPythPrices() {
     try {
         const ids = Object.values(PYTH_FEEDS);
-        const resp = await axios_1.default.get('https://hermes.pyth.network/v2/updates/price/latest', {
+        const resp = await axios_1.default.get('https://hermes.pyth.network/api/latest_price_feeds', {
             params: { ids },
             timeout: 10000,
         });
-        const parsed = resp.data?.parsed || [];
+        const parsed = Array.isArray(resp.data) ? resp.data : [];
         const symbols = Object.keys(PYTH_FEEDS);
         for (let i = 0; i < parsed.length; i++) {
             const p = parsed[i]?.price;
