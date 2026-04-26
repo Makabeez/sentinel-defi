@@ -3,3 +3,5 @@ dist
 .env
 wallet.json
 .vercel
+sentinel-v3.tar.gz
+sentinel-v3/
