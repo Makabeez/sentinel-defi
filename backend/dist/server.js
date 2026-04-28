@@ -467,9 +467,125 @@ app.get('/api/funding', async (_, res) => {
     const rates = await fetchFundingRates();
     res.json(rates);
 });
+const GOVERNANCE_TRUST_SCORES = [
+    {
+        protocol: 'kamino', name: 'Kamino Finance', score: 88, tier: 'excellent',
+        factors: [
+            { label: 'Multisig', score: 20, max: 25, detail: '3/5 multisig via Squads' },
+            { label: 'Timelock', score: 22, max: 25, detail: '48h timelock' },
+            { label: 'Audits', score: 23, max: 25, detail: '9 independent audits' },
+            { label: 'Activity', score: 23, max: 25, detail: 'No suspicious changes 90+ days' },
+        ],
+        adminPubkey: 'KAMino9rK6Mr1rxWk3Cq3xvGSfoBhqFpBJCMBM6nhz8',
+        multisigType: '3/5 Squads', timelockHours: 48, lastAdminChange: '2025-11-15', status: 'active',
+    },
+    {
+        protocol: 'jupiter-lend', name: 'Jupiter Lend', score: 92, tier: 'excellent',
+        factors: [
+            { label: 'Multisig', score: 23, max: 25, detail: '4/7 multisig via Squads' },
+            { label: 'Timelock', score: 24, max: 25, detail: '72h timelock' },
+            { label: 'Audits', score: 23, max: 25, detail: '7 audits + formally verified' },
+            { label: 'Activity', score: 22, max: 25, detail: 'Transparent governance' },
+        ],
+        adminPubkey: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',
+        multisigType: '4/7 Squads', timelockHours: 72, lastAdminChange: '2026-01-20', status: 'active',
+    },
+    {
+        protocol: 'solend', name: 'Solend', score: 75, tier: 'good',
+        factors: [
+            { label: 'Multisig', score: 19, max: 25, detail: '3/5 multisig' },
+            { label: 'Timelock', score: 18, max: 25, detail: '24h timelock' },
+            { label: 'Audits', score: 20, max: 25, detail: '6 audits' },
+            { label: 'Activity', score: 18, max: 25, detail: 'Stable, no recent changes' },
+        ],
+        adminPubkey: 'So1endDq2YkqhipRh3WViPa8hFSq6z6jK3JAqp9nh6D',
+        multisigType: '3/5 Multisig', timelockHours: 24, lastAdminChange: '2025-12-01', status: 'active',
+    },
+    {
+        protocol: 'marginfi', name: 'MarginFi', score: 72, tier: 'good',
+        factors: [
+            { label: 'Multisig', score: 18, max: 25, detail: '2/3 multisig' },
+            { label: 'Timelock', score: 15, max: 25, detail: '24h timelock' },
+            { label: 'Audits', score: 20, max: 25, detail: '5 audits' },
+            { label: 'Activity', score: 19, max: 25, detail: 'Key rotated 45 days ago' },
+        ],
+        adminPubkey: 'MRGNWSHaWmz3CPFcYt3Dqt2LBYhQaxDgdBbJbMvhAQi',
+        multisigType: '2/3 Multisig', timelockHours: 24, lastAdminChange: '2026-03-14', status: 'active',
+    },
+    {
+        protocol: 'drift', name: 'Drift Protocol', score: 8, tier: 'critical',
+        factors: [
+            { label: 'Multisig', score: 2, max: 25, detail: '2/5 NO TIMELOCK at exploit' },
+            { label: 'Timelock', score: 0, max: 25, detail: 'REMOVED Mar 27, 2026' },
+            { label: 'Audits', score: 4, max: 25, detail: 'Audits bypassed by admin exploit' },
+            { label: 'Activity', score: 2, max: 25, detail: '$285M drained Apr 1, 2026' },
+        ],
+        adminPubkey: 'DRiFTGejL2AHo2bSTBEzTpCKNerLCGMfrazr6gCh2xKH',
+        multisigType: '2/5 (compromised)', timelockHours: 0, lastAdminChange: '2026-03-27', status: 'frozen',
+    },
+];
 // ============================================
-// START
+// WALLET SCANNER ENDPOINT
 // ============================================
+app.get('/api/wallet/:address', async (req, res) => {
+    const address = req.params.address;
+    try {
+        const pubkey = new web3_js_1.PublicKey(address);
+        const balance = await connection.getBalance(pubkey);
+        const solBalance = balance / 1e9;
+        const tokenAccounts = await connection.getParsedTokenAccountsByOwner(pubkey, {
+            programId: new web3_js_1.PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'),
+        });
+        const holdings = [];
+        const exposedProtocols = new Set();
+        for (const account of tokenAccounts.value) {
+            const parsed = account.account.data.parsed?.info;
+            if (!parsed)
+                continue;
+            const amount = parsed.tokenAmount?.uiAmount || 0;
+            if (amount === 0)
+                continue;
+            holdings.push({ mint: parsed.mint, amount });
+        }
+        if (solBalance > 0) {
+            exposedProtocols.add('kamino');
+            exposedProtocols.add('jupiter-lend');
+            exposedProtocols.add('solend');
+            exposedProtocols.add('marginfi');
+        }
+        if (holdings.length > 0) {
+            exposedProtocols.add('kamino');
+            exposedProtocols.add('jupiter-lend');
+        }
+        const exposure = Array.from(exposedProtocols).map(protoId => {
+            const ts = GOVERNANCE_TRUST_SCORES.find(g => g.protocol === protoId);
+            const protoTvl = tvlHistory.get(protoId);
+            const latestTvl = protoTvl?.[protoTvl.length - 1];
+            return {
+                protocol: protoId, name: ts?.name || protoId,
+                trustScore: ts?.score || 0, tier: ts?.tier || 'unknown',
+                multisig: ts?.multisigType || 'unknown', timelockHours: ts?.timelockHours || 0,
+                status: ts?.status || 'unknown', tvl: latestTvl?.tvl || 0,
+            };
+        });
+        const avgTrust = exposure.length > 0 ? exposure.reduce((s, e) => s + e.trustScore, 0) / exposure.length : 100;
+        const hasCritical = exposure.some(e => e.tier === 'critical');
+        let walletRisk = 'low';
+        if (hasCritical)
+            walletRisk = 'critical';
+        else if (avgTrust < 60)
+            walletRisk = 'elevated';
+        else if (avgTrust < 75)
+            walletRisk = 'moderate';
+        res.json({ address, solBalance, totalHoldings: holdings.length, exposure, walletRisk, avgTrustScore: Math.round(avgTrust), timestamp: Date.now() });
+    }
+    catch (err) {
+        res.status(400).json({ error: 'Invalid address or scan failed: ' + err.message });
+    }
+});
+app.get('/api/trust-scores', (_, res) => {
+    res.json(GOVERNANCE_TRUST_SCORES);
+});
 app.listen(PORT, () => {
     console.log(`[SENTINEL] REST API on :${PORT}`);
     console.log(`[SENTINEL] WebSocket on :${WS_PORT}`);
@@ -600,5 +716,13 @@ app.get('/api/governance', (_, res) => {
         });
     }
     res.json(snapshots);
+});
+// ============================================
+// START
+// ============================================
+app.listen(PORT, () => {
+    console.log(`[SENTINEL] REST API on :${PORT}`);
+    console.log(`[SENTINEL] WebSocket on :${WS_PORT}`);
+    runMonitoringLoop();
 });
 //# sourceMappingURL=server.js.map
