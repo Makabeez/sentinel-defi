@@ -36,6 +36,19 @@ const DEMO_RISK = {
 
 const DEMO_FUNDING = { binance: -0.00006316, bybit: -0.00010427, timestamp: Date.now() };
 
+const TRUST_SCORES = [
+  { protocol: 'jupiter-lend', name: 'Jupiter Lend', score: 92, tier: 'excellent', multisig: '4/7 Squads', timelockHours: 72, audits: 7, status: 'active', lastAdminChange: '2026-01-20', color: '#00BFA5',
+    factors: [{ label: 'Multisig', score: 23, max: 25, detail: '4/7 multisig via Squads' }, { label: 'Timelock', score: 24, max: 25, detail: '72h timelock' }, { label: 'Audits', score: 23, max: 25, detail: '7 audits + formally verified' }, { label: 'Activity', score: 22, max: 25, detail: 'Transparent governance' }] },
+  { protocol: 'kamino', name: 'Kamino Finance', score: 88, tier: 'excellent', multisig: '3/5 Squads', timelockHours: 48, audits: 9, status: 'active', lastAdminChange: '2025-11-15', color: '#FF6B35',
+    factors: [{ label: 'Multisig', score: 20, max: 25, detail: '3/5 multisig via Squads' }, { label: 'Timelock', score: 22, max: 25, detail: '48h timelock' }, { label: 'Audits', score: 23, max: 25, detail: '9 independent audits' }, { label: 'Activity', score: 23, max: 25, detail: 'No changes in 90+ days' }] },
+  { protocol: 'solend', name: 'Solend', score: 75, tier: 'good', multisig: '3/5 Multisig', timelockHours: 24, audits: 6, status: 'active', lastAdminChange: '2025-12-01', color: '#7C4DFF',
+    factors: [{ label: 'Multisig', score: 19, max: 25, detail: '3/5 multisig' }, { label: 'Timelock', score: 18, max: 25, detail: '24h timelock' }, { label: 'Audits', score: 20, max: 25, detail: '6 audits' }, { label: 'Activity', score: 18, max: 25, detail: 'Stable, no recent changes' }] },
+  { protocol: 'marginfi', name: 'MarginFi', score: 72, tier: 'good', multisig: '2/3 Multisig', timelockHours: 24, audits: 5, status: 'active', lastAdminChange: '2026-03-14', color: '#DCE775',
+    factors: [{ label: 'Multisig', score: 18, max: 25, detail: '2/3 multisig' }, { label: 'Timelock', score: 15, max: 25, detail: '24h timelock' }, { label: 'Audits', score: 20, max: 25, detail: '5 audits' }, { label: 'Activity', score: 19, max: 25, detail: 'Key rotated 45 days ago' }] },
+  { protocol: 'drift', name: 'Drift Protocol', score: 8, tier: 'critical', multisig: '2/5 (compromised)', timelockHours: 0, audits: 4, status: 'frozen', lastAdminChange: '2026-03-27', color: '#E040FB',
+    factors: [{ label: 'Multisig', score: 2, max: 25, detail: '2/5 NO TIMELOCK at exploit' }, { label: 'Timelock', score: 0, max: 25, detail: 'REMOVED Mar 27, 2026' }, { label: 'Audits', score: 4, max: 25, detail: 'Bypassed by admin exploit' }, { label: 'Activity', score: 2, max: 25, detail: '$285M drained Apr 1' }] },
+];
+
 // REAL alerts captured from live backend
 const REAL_ALERTS = [
   {
@@ -96,14 +109,6 @@ const DRIFT_HACK_TIMELINE = [
     title: 'CASCADE: 12+ protocols exposed to Drift contagion',
     description: 'Sentinel maps cross-protocol exposure: Reflect Money (paused), Ranger Finance ($900K exposed), PiggyBank ($106K), Project0 (borrowing halted). TVL alerts triggered across Kamino, Jupiter Lend, MarginFi.',
   },
-];
-
-// Governance accounts being monitored
-const GOVERNANCE_ACCOUNTS = [
-  { label: 'Drift Security Council', protocol: 'drift', pubkey: 'DRiFTGejL2AHo2bSTBEzTpCKNerLCGMfrazr6gCh2xKH', status: 'frozen', lastChecked: '2026-04-15 15:51' },
-  { label: 'Drift Admin Authority', protocol: 'drift', pubkey: 'DRfTnEVxAYBiHnvM7CbBGacg6D4LRGF7BaWNkjbnp9ae', status: 'frozen', lastChecked: '2026-04-15 15:51' },
-  { label: 'Kamino Admin', protocol: 'kamino', pubkey: 'KAMino9rK6Mr1rxWk3Cq3xvGSfoBhqFpBJCMBM6nhz8', status: 'active', lastChecked: '2026-04-19 23:51' },
-  { label: 'MarginFi Admin', protocol: 'marginfi', pubkey: 'MRGNWSHaWmz3CPFcYt3Dqt2LBYhQaxDgdBbJbMvhAQi', status: 'active', lastChecked: '2026-04-19 23:51' },
 ];
 
 // ============================================
@@ -375,49 +380,164 @@ function FundingPanel({ funding }) {
   );
 }
 
-function GovernancePanel() {
+function TrustScoreRing({ score, size = 80 }) {
+  const radius = (size - 8) / 2;
+  const circ = 2 * Math.PI * radius;
+  const offset = circ - (score / 100) * circ;
+  const color = score >= 80 ? '#10b981' : score >= 60 ? '#eab308' : score >= 30 ? '#f97316' : '#ef4444';
   return (
-    <div style={card}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-        <h3 style={sTitle}>GOVERNANCE MONITOR</h3>
-        <span style={badge('rgba(6,182,212,0.15)', '#06b6d4')}>4 accounts tracked</span>
-      </div>
-      <p style={{ fontSize: 11, color: '#64748b', margin: '0 0 16px', lineHeight: 1.5 }}>
-        Monitors multisig admin accounts for data changes, key rotations, and timelock modifications.
-        The Drift exploit was enabled by a timelock removal on March 27 — Sentinel would have flagged it as critical.
-      </p>
-      <div style={{ display: 'grid', gap: 8 }}>
-        {GOVERNANCE_ACCOUNTS.map((acc, i) => {
-          const proto = DEMO_PROTOCOLS.find(p => p.id === acc.protocol);
-          const isFrozen = acc.status === 'frozen';
-          return (
-            <div key={i} style={{
-              padding: '12px 14px', background: 'rgba(30,41,59,0.5)', borderRadius: 8,
-              borderLeft: `3px solid ${proto?.color || '#475569'}`, opacity: isFrozen ? 0.6 : 1,
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                <span style={{ fontSize: 13, color: '#e2e8f0', fontWeight: 600 }}>{acc.label}</span>
-                <span style={badge(
-                  isFrozen ? 'rgba(239,68,68,0.15)' : 'rgba(16,185,129,0.15)',
-                  isFrozen ? '#ef4444' : '#10b981'
-                )}>{isFrozen ? 'FROZEN' : 'MONITORING'}</span>
-              </div>
-              <div style={{ fontSize: 10, ...mono, color: '#64748b' }}>
-                {acc.pubkey.slice(0, 8)}...{acc.pubkey.slice(-8)}
-              </div>
-              <div style={{ fontSize: 9, ...mono, color: '#475569', marginTop: 4 }}>
-                Protocol: {acc.protocol} | Last checked: {acc.lastChecked}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      <div style={{ marginTop: 16, padding: '10px 14px', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)', borderRadius: 8 }}>
-        <div style={{ fontSize: 11, color: '#fca5a5', fontWeight: 600, marginBottom: 4 }}>What Sentinel detects:</div>
-        <div style={{ fontSize: 10, color: '#94a3b8', lineHeight: 1.6 }}>
-          Multisig key rotations, timelock parameter changes, admin authority transfers, durable nonce account creation/advancement linked to protocol governance wallets. These are the exact attack vectors used in the Drift $285M exploit.
+    <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
+      <circle cx={size/2} cy={size/2} r={radius} fill="none" stroke="rgba(51,65,85,0.3)" strokeWidth="4" />
+      <circle cx={size/2} cy={size/2} r={radius} fill="none" stroke={color} strokeWidth="4"
+        strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round" style={{ transition: 'stroke-dashoffset 1s ease' }} />
+      <text x={size/2} y={size/2} textAnchor="middle" dominantBaseline="central" fill={color}
+        fontSize={size > 60 ? "20" : "14"} fontWeight="800" fontFamily="'JetBrains Mono', monospace"
+        style={{ transform: 'rotate(90deg)', transformOrigin: 'center' }}>{score}</text>
+    </svg>
+  );
+}
+
+function TrustScoreCard({ ts }) {
+  const tierColors = { excellent: '#10b981', good: '#06b6d4', moderate: '#eab308', poor: '#f97316', critical: '#ef4444' };
+  const color = tierColors[ts.tier] || '#64748b';
+  return (
+    <div style={{ ...card, borderLeft: `3px solid ${ts.color}`, opacity: ts.status === 'frozen' ? 0.7 : 1 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <TrustScoreRing score={ts.score} size={70} />
+        <div style={{ flex: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <span style={{ fontSize: 15, color: '#e2e8f0', fontWeight: 700 }}>{ts.name}</span>
+            <span style={badge(color + '22', color)}>{ts.tier}</span>
+            {ts.status === 'frozen' && <span style={badge('rgba(239,68,68,0.2)', '#ef4444')}>FROZEN</span>}
+          </div>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 6 }}>
+            <span style={{ fontSize: 10, ...mono, color: '#94a3b8' }}>Multisig: <span style={{ color: '#e2e8f0' }}>{ts.multisig}</span></span>
+            <span style={{ fontSize: 10, ...mono, color: '#94a3b8' }}>Timelock: <span style={{ color: ts.timelockHours === 0 ? '#ef4444' : '#e2e8f0' }}>{ts.timelockHours}h</span></span>
+            <span style={{ fontSize: 10, ...mono, color: '#94a3b8' }}>Audits: <span style={{ color: '#e2e8f0' }}>{ts.audits}</span></span>
+          </div>
         </div>
       </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 14 }}>
+        {ts.factors.map((f, i) => (
+          <div key={i} style={{ padding: '6px 10px', background: 'rgba(30,41,59,0.5)', borderRadius: 6 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+              <span style={{ fontSize: 9, color: '#94a3b8', ...mono }}>{f.label}</span>
+              <span style={{ fontSize: 9, color: '#e2e8f0', ...mono }}>{f.score}/{f.max}</span>
+            </div>
+            <div style={{ height: 3, background: 'rgba(51,65,85,0.5)', borderRadius: 2 }}>
+              <div style={{ width: `${(f.score/f.max)*100}%`, height: '100%', borderRadius: 2, background: f.score/f.max >= 0.8 ? '#10b981' : f.score/f.max >= 0.5 ? '#eab308' : '#ef4444' }} />
+            </div>
+            <div style={{ fontSize: 8, color: '#64748b', marginTop: 2 }}>{f.detail}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ fontSize: 9, ...mono, color: '#475569', marginTop: 10 }}>Last admin change: {ts.lastAdminChange}</div>
+    </div>
+  );
+}
+
+function GovernanceTrustPanel() {
+  const sorted = [...TRUST_SCORES].sort((a, b) => b.score - a.score);
+  const avgScore = Math.round(sorted.reduce((s, t) => s + t.score, 0) / sorted.length);
+  return (
+    <div>
+      <div style={{ ...card, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 20 }}>
+        <TrustScoreRing score={avgScore} size={90} />
+        <div>
+          <h3 style={{ margin: '0 0 4px', fontSize: 15, color: '#e2e8f0', fontWeight: 700 }}>Solana DeFi Governance Health</h3>
+          <p style={{ margin: '0 0 8px', fontSize: 11, color: '#94a3b8', lineHeight: 1.5 }}>
+            Trust scores based on multisig configuration, timelock duration, audit history, and admin activity. The Drift exploit was enabled by a governance failure — Sentinel monitors the human layer that STRIDE and audits cannot cover.
+          </p>
+          <div style={{ display: 'flex', gap: 12 }}>
+            <span style={{ fontSize: 10, ...mono, color: '#10b981' }}>{sorted.filter(t => t.tier === 'excellent').length} Excellent</span>
+            <span style={{ fontSize: 10, ...mono, color: '#06b6d4' }}>{sorted.filter(t => t.tier === 'good').length} Good</span>
+            <span style={{ fontSize: 10, ...mono, color: '#ef4444' }}>{sorted.filter(t => t.tier === 'critical').length} Critical</span>
+          </div>
+        </div>
+      </div>
+      <div style={{ display: 'grid', gap: 12 }}>{sorted.map(ts => <TrustScoreCard key={ts.protocol} ts={ts} />)}</div>
+    </div>
+  );
+}
+
+function WalletScanner() {
+  const [address, setAddress] = useState('');
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const API = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+
+  const scan = async () => {
+    if (!address || address.length < 32) { setError('Enter a valid Solana address'); return; }
+    setLoading(true); setError(''); setResult(null);
+    try {
+      const resp = await fetch(`${API}/api/wallet/${address}`);
+      if (!resp.ok) throw new Error('fail');
+      setResult(await resp.json());
+    } catch {
+      setError('Backend unreachable — showing demo exposure.');
+      setResult({
+        address, solBalance: 12.5, totalHoldings: 3, walletRisk: 'moderate', avgTrustScore: 67,
+        exposure: TRUST_SCORES.filter(t => t.status !== 'frozen').map(t => ({
+          protocol: t.protocol, name: t.name, trustScore: t.score, tier: t.tier,
+          multisig: t.multisig, timelockHours: t.timelockHours, status: t.status,
+        })), timestamp: Date.now(), demo: true,
+      });
+    }
+    setLoading(false);
+  };
+
+  const riskColors = { low: '#10b981', moderate: '#eab308', elevated: '#f97316', critical: '#ef4444' };
+
+  return (
+    <div>
+      <div style={{ ...card, marginBottom: 16 }}>
+        <h3 style={{ ...sTitle, marginBottom: 10 }}>WALLET RISK SCANNER</h3>
+        <p style={{ fontSize: 11, color: '#64748b', margin: '0 0 14px', lineHeight: 1.5 }}>
+          Enter any Solana wallet to scan DeFi exposure and governance trust scores for every protocol the wallet interacts with. See YOUR risk before the next exploit.
+        </p>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input value={address} onChange={e => setAddress(e.target.value)}
+            placeholder="Enter Solana wallet address..."
+            style={{ flex: 1, padding: '10px 14px', background: 'rgba(30,41,59,0.5)', border: '1px solid rgba(51,65,85,0.4)', borderRadius: 8, color: '#e2e8f0', fontSize: 13, ...mono, outline: 'none' }}
+            onKeyDown={e => e.key === 'Enter' && scan()} />
+          <button onClick={scan} disabled={loading} style={{
+            padding: '10px 20px', background: 'linear-gradient(135deg, #06b6d4, #8b5cf6)',
+            border: 'none', borderRadius: 8, color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer', ...mono, opacity: loading ? 0.5 : 1,
+          }}>{loading ? 'SCANNING...' : 'SCAN'}</button>
+        </div>
+        {error && <div style={{ fontSize: 11, color: '#f97316', marginTop: 8 }}>{error}</div>}
+      </div>
+
+      {result && (
+        <div>
+          {result.demo && (
+            <div style={{ padding: '8px 14px', background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)', borderRadius: 8, marginBottom: 12, fontSize: 10, color: '#a78bfa', ...mono }}>
+              Demo mode — showing simulated exposure. Connect to live backend for real wallet scanning.
+            </div>
+          )}
+          <div style={{ ...card, marginBottom: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              <TrustScoreRing score={result.avgTrustScore} size={80} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 10, ...mono, color: '#64748b', marginBottom: 4 }}>{result.address.slice(0, 8)}...{result.address.slice(-8)}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                  <span style={{ fontSize: 18, fontWeight: 700, ...mono, color: '#e2e8f0' }}>{result.solBalance.toFixed(2)} SOL</span>
+                  <span style={badge((riskColors[result.walletRisk]||'#64748b')+'22', riskColors[result.walletRisk]||'#64748b')}>RISK: {result.walletRisk}</span>
+                </div>
+                <span style={{ fontSize: 10, ...mono, color: '#94a3b8' }}>Exposed to {result.exposure.length} protocols | Avg trust: {result.avgTrustScore}/100</span>
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gap: 12 }}>
+            {result.exposure.map(exp => {
+              const ts = TRUST_SCORES.find(t => t.protocol === exp.protocol);
+              return ts ? <TrustScoreCard key={exp.protocol} ts={ts} /> : null;
+            })}
+          </div>
+        </div>
+      )}
+      {!result && <GovernanceTrustPanel />}
     </div>
   );
 }
@@ -500,7 +620,7 @@ export default function App() {
   const { protocols, tvl, alerts, oracles, cascadeRisk, funding, connected, mode } = useSentinel();
   const [tab, setTab] = useState('overview');
 
-  const tabs = ['overview', 'drift hack replay', 'governance', 'alerts', 'oracles'];
+  const tabs = ['overview', 'wallet scanner', 'trust scores', 'drift hack replay', 'alerts', 'oracles'];
 
   return (
     <div style={{ minHeight: '100vh', background: '#060a14', color: '#e2e8f0', fontFamily: "'Inter', 'Segoe UI', sans-serif" }}>
@@ -522,7 +642,7 @@ export default function App() {
           }}>S</div>
           <div>
             <h1 style={{ margin: 0, fontSize: 17, fontWeight: 800, letterSpacing: '-0.02em' }}>SENTINEL</h1>
-            <span style={{ fontSize: 9, color: '#64748b', ...mono, letterSpacing: '0.08em' }}>SOLANA DEFI SECURITY INTELLIGENCE</span>
+            <span style={{ fontSize: 9, color: '#64748b', ...mono, letterSpacing: '0.08em' }}>SOLANA GOVERNANCE SECURITY LAYER</span>
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -565,7 +685,7 @@ export default function App() {
             fontSize: 11, fontWeight: 600, ...mono, textTransform: 'uppercase',
             letterSpacing: '0.08em', whiteSpace: 'nowrap', transition: 'color 0.2s',
           }}>
-            {t === 'governance' ? '🔐 ' : t === 'drift hack replay' ? '🔴 ' : ''}{t}
+            {t === 'trust scores' ? '🔐 ' : t === 'drift hack replay' ? '🔴 ' : t === 'wallet scanner' ? '👛 ' : ''}{t}
           </button>
         ))}
       </nav>
@@ -587,7 +707,8 @@ export default function App() {
           </>
         )}
         {tab === 'drift hack replay' && <DriftHackReplay />}
-        {tab === 'governance' && <GovernancePanel />}
+        {tab === 'wallet scanner' && <WalletScanner />}
+        {tab === 'trust scores' && <GovernanceTrustPanel />}
         {tab === 'alerts' && <AlertFeed alerts={[...REAL_ALERTS, ...DRIFT_HACK_TIMELINE]} title="ALL DETECTED EVENTS" />}
         {tab === 'oracles' && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: 16 }}>
@@ -599,7 +720,7 @@ export default function App() {
 
       {/* Footer */}
       <footer style={{ textAlign: 'center', padding: 20, fontSize: 10, color: '#334155', ...mono }}>
-        Sentinel v1.0 — Solana Frontier Hackathon 2026 — @Makabeez —{' '}
+        Sentinel v2.0 — Solana Governance Security Layer — Frontier Hackathon 2026 — @Makabeez —{' '}
         <a href="https://github.com/Makabeez/sentinel-defi" target="_blank" rel="noreferrer" style={{ color: '#475569' }}>GitHub</a>
         {' | '}
         <a href="https://x.com/geiserjoe2" target="_blank" rel="noreferrer" style={{ color: '#475569' }}>X/Twitter</a>
