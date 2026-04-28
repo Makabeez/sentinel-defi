@@ -334,6 +334,24 @@ function computeCascadeRisk() {
 // ============================================
 // ALERT SYSTEM
 // ============================================
+// TELEGRAM ALERT BOT
+// ============================================
+const TELEGRAM_BOT_TOKEN = "8384781852:AAEhvRpQsPF6hV939Yxqhb0-Bm8uaOsy6JQ";
+const TELEGRAM_CHAT_ID = "476352360";
+const SEV_EMOJI = { critical: "🚨", high: "⚠️", medium: "🟡", low: "🔵", info: "ℹ️" };
+async function sendTelegramAlert(a) {
+    if (a.severity !== "critical" && a.severity !== "high")
+        return;
+    const msg = `${SEV_EMOJI[a.severity] || "📢"} *SENTINEL ALERT*\n\n*${a.severity.toUpperCase()}* | ${a.protocol}\n*${a.title}*\n\n${a.description}\n\n🕐 ${new Date(a.timestamp).toLocaleString()}\n🔗 [Dashboard](https://frontend-eta-topaz-85.vercel.app)`;
+    try {
+        await axios_1.default.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, { chat_id: TELEGRAM_CHAT_ID, text: msg, parse_mode: "Markdown", disable_web_page_preview: true });
+        console.log(`[TELEGRAM] Alert sent: ${a.title}`);
+    }
+    catch (err) {
+        console.error("[TELEGRAM] Error:", err.message);
+    }
+}
+// ============================================
 function pushAlert(partial) {
     // Deduplicate: don't push same type+protocol within 5 min
     const recent = alerts.find(a => a.type === partial.type && a.protocol === partial.protocol && Date.now() - a.timestamp < 300000);
@@ -348,7 +366,8 @@ function pushAlert(partial) {
     if (alerts.length > 500)
         alerts.length = 500;
     // Broadcast to WebSocket clients
-    broadcast({ type: 'alert', data: alert });
+    broadcast({ type: "alert", data: alert });
+    sendTelegramAlert(alert);
     console.log(`[ALERT][${alert.severity.toUpperCase()}] ${alert.title}`);
 }
 // ============================================
