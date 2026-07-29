@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0D0F16"/>
+      <stop offset="60%" stop-color="#11141F"/>
+      <stop offset="100%" stop-color="#171226"/>
+    </linearGradient>
+    <linearGradient id="rule" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#7C5CFF" stop-opacity="0.9"/>
+      <stop offset="70%" stop-color="#7C5CFF" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#FFB020" stop-opacity="0.8"/>
+    </linearGradient>
+    <style>
+      .wordmark { font-family: ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+                  font-weight:800; font-size:96px; letter-spacing:18px; fill:#F2F4F9; }
+      .tag  { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:28px; fill:#9AA4BC; }
+      .stat { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:22px; fill:#FFB020; }
+      .meta { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:19px; fill:#5D6784; letter-spacing:3px; }
+      .ring { fill:none; stroke-width:11; }
+    </style>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <g transform="translate(96 148)">
+    <g transform="rotate(-90 60 60)">
+      <circle class="ring" cx="60" cy="60" r="50" stroke="#3A4358" stroke-dasharray="38.06 6.82"/>
+      <circle class="ring" cx="60" cy="60" r="50" stroke="#7C5CFF" stroke-dasharray="38.06 276.1" stroke-dashoffset="0"/>
+      <circle class="ring" cx="60" cy="60" r="50" stroke="#7C5CFF" stroke-dasharray="38.06 276.1" stroke-dashoffset="-44.88"/>
+      <circle class="ring" cx="60" cy="60" r="50" stroke="#7C5CFF" stroke-dasharray="38.06 276.1" stroke-dashoffset="-89.76"/>
+      <circle class="ring" cx="60" cy="60" r="50" stroke="#7C5CFF" stroke-dasharray="38.06 276.1" stroke-dashoffset="-134.64"/>
+      <circle class="ring" cx="60" cy="60" r="50" stroke="#FFB020" stroke-dasharray="38.06 276.1" stroke-dashoffset="-224.4"/>
+    </g>
+    <circle cx="60" cy="60" r="19" fill="#C9D1E3"/>
+    <circle cx="60" cy="60" r="7.5" fill="#0D0F16"/>
+  </g>
+  <text class="wordmark" x="256" y="240">SENTINEL</text>
+  <text class="tag" x="260" y="300">Watching the humans behind the smart contracts.</text>
+  <line x1="260" y1="352" x2="1104" y2="352" stroke="url(#rule)" stroke-width="2"/>
+  <text class="stat" x="260" y="410">BonkDAO: $3.96M of votes controlled a $20M treasury — 5.05x</text>
+  <text class="stat" x="260" y="448">Priced from public chain state before the proposal was filed.</text>
+  <text class="meta" x="260" y="530">GOVERNANCE TRUST SCORES · CAPTURE COST · WALLET RISK · SOLANA</text>
+</svg>
