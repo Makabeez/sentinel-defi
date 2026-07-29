@@ -38,6 +38,7 @@ const fs = require('fs');
 const path = require('path');
 const { Connection, PublicKey } = require('@solana/web3.js');
 const splGov = require('@solana/spl-governance');
+const { resolveVault } = require('./squadsResolver');
 
 const RPC_URL =
   process.env.HELIUS_RPC_URL ||
@@ -155,17 +156,50 @@ async function classifyAuthority(connection, authority) {
   const owner = info.owner.toBase58();
 
   if (owner === SYSTEM_PROGRAM) {
-    return onCurve
-      ? {
-          model: 'single-key',
-          detail: 'a single keypair can replace the program',
-          authority: authority.toBase58(),
-        }
-      : {
-          model: 'pda',
-          detail: 'PDA — no private key; likely a multisig vault, config unresolved',
-          authority: authority.toBase58(),
-        };
+    if (onCurve) {
+      return {
+        model: 'single-key',
+        detail: 'a single keypair can replace the program',
+        authority: authority.toBase58(),
+      };
+    }
+    // Off-curve: a PDA. Try to resolve it to the Squads multisig behind it,
+    // because "PDA" alone hides the difference between 7-of-17 and 1-of-1.
+    let squads = null;
+    try {
+      squads = await resolveVault(connection, authority);
+    } catch (err) {
+      console.warn(`[trust] squads resolution failed: ${err.message}`);
+    }
+
+    if (squads && squads.threshold) {
+      return {
+        model: 'multisig',
+        detail: `Squads v4 ${squads.threshold}/${squads.members}`,
+        authority: authority.toBase58(),
+        threshold: squads.threshold,
+        members: squads.members,
+        timelockSeconds: squads.timeLockSeconds,
+        multisig: squads.multisig,
+      };
+    }
+
+    if (squads && squads.multisig) {
+      // Vault resolved but the config read failed — say so rather than implying
+      // this is an unknown controller. Re-running will pick it up from cache.
+      return {
+        model: 'pda',
+        detail: `Squads vault of ${squads.multisig.slice(0, 8)}… — config read failed, retry`,
+        authority: authority.toBase58(),
+        multisig: squads.multisig,
+      };
+    }
+
+    return {
+      model: 'pda',
+      detail: 'PDA — no private key; not a Squads vault, controller unresolved',
+      authority: authority.toBase58(),
+    };
   }
 
   if (owner === SQUADS_V4) {
