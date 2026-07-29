@@ -5,7 +5,7 @@ import dotenv from 'dotenv';
 import cors from 'cors';
 import { Connection, PublicKey } from '@solana/web3.js';
 
-dotenv.config({ path: '/opt/sentinel/.env' });
+dotenv.config({ path: __dirname + '/../.env' });
 
 const app = express();
 app.use(cors());
@@ -688,11 +688,6 @@ app.get('/api/trust-scores', (_, res) => {
   res.json(GOVERNANCE_TRUST_SCORES);
 });
 
-app.listen(PORT, () => {
-  console.log(`[SENTINEL] REST API on :${PORT}`);
-  console.log(`[SENTINEL] WebSocket on :${WS_PORT}`);
-  runMonitoringLoop();
-});
 
 // ============================================
 // GOVERNANCE MONITOR — multisig & timelock changes
