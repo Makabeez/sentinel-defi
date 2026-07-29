@@ -5,3 +5,4 @@ wallet.json
 .vercel
 sentinel-v3.tar.gz
 sentinel-v3/
+.sentinel-trust-state.json
