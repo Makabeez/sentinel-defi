@@ -6,5 +6,10 @@ module.exports = {
     args: '--watch',
     watch: false,
     autorestart: true,
+    env: {
+      SOLANA_RPC_URL: 'https://api.mainnet-beta.solana.com',
+      RPC_DELAY_MS: '2500',
+      TRUST_POLL_INTERVAL: '3600000',
+    },
   }],
 };

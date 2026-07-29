@@ -257,9 +257,14 @@ async function classifyAuthority(connection, authority) {
 async function lastAuthorityActivity(connection, programDataPubkey) {
   try {
     const sigs = await connection.getSignaturesForAddress(programDataPubkey, { limit: 1 });
-    return sigs[0]?.blockTime ?? null;
+    // An empty result is NOT evidence of quiet — some RPCs serve limited or no
+    // signature history. Treating it as "quiet" makes the score depend on which
+    // provider you happen to be pointed at, and manufactures SCORE_DROP alerts
+    // when the endpoint changes.
+    if (!sigs.length || !sigs[0]?.blockTime) return { status: 'unavailable' };
+    return { status: 'ok', blockTime: sigs[0].blockTime };
   } catch {
-    return null;
+    return { status: 'unavailable' };
   }
 }
 
@@ -308,9 +313,12 @@ function scoreTimelock(cls) {
   return { points: 6, max: 30, label: `${hours.toFixed(1)}h timelock — minimal delay` };
 }
 
-function scoreRecency(lastActivity) {
-  if (!lastActivity) return { points: 20, max: 25, label: 'No recent authority activity found' };
-  const days = (Date.now() / 1000 - lastActivity) / 86400;
+function scoreRecency(activity) {
+  if (!activity || activity.status !== 'ok') {
+    // Fixed mid value: unknown is unknown, and must not vary by RPC provider.
+    return { points: 12, max: 25, label: 'Authority history unavailable from this RPC' };
+  }
+  const days = (Date.now() / 1000 - activity.blockTime) / 86400;
   if (days >= 180) return { points: 25, max: 25, label: `Quiet for ${days.toFixed(0)} days` };
   if (days >= 90) return { points: 21, max: 25, label: `Last change ${days.toFixed(0)}d ago` };
   if (days >= 30) return { points: 16, max: 25, label: `Last change ${days.toFixed(0)}d ago` };
@@ -334,7 +342,7 @@ async function scoreProgram(connection, { id, name, programId }) {
 
   let cls;
   let lastDeploySlot = null;
-  let lastActivity = null;
+  let lastActivity = { status: 'unavailable' };
 
   if (addr.immutable) {
     cls = { model: 'immutable', detail: addr.reason };
@@ -362,7 +370,7 @@ async function scoreProgram(connection, { id, name, programId }) {
     members: cls.members ?? null,
     timelockSeconds: cls.timelockSeconds ?? 0,
     lastDeploySlot,
-    lastActivity,
+    lastActivity: lastActivity.status === 'ok' ? lastActivity.blockTime : null,
     factors,
   };
 }
