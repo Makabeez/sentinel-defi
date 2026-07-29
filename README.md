@@ -98,13 +98,13 @@ Interactive timeline of the on-chain signals Sentinel would have surfaced ahead 
 
 ## Where Sentinel sits
 
-| Tool | Monitors | Drift, Apr 1 | BonkDAO, Jul 7 |
+| Tool | Monitors | Drift, Apr 1 | BonkDAO, Jul 6 |
 | --- | --- | --- | --- |
 | STRIDE / formal verification | Program correctness | Would not have caught it | Would not have caught it |
 | Hypernative | Transaction-level threats | Detected during, not before | — |
 | Range Security | Real-time tx alerting | No governance layer | No governance layer |
 | DefiLlama | TVL metrics | No admin monitoring | No admin monitoring |
-| **Sentinel** | **Governance + human layer** | **Timelock removal, 5 days early** | **Vote concentration, 6 days early** |
+| **Sentinel** | **Governance + human layer** | **Timelock removal, 5 days early** | **5.05x capture cost, priced before filing** |
 
 ## Verify it yourself
 
