@@ -356,7 +356,7 @@ function FundingPanel({ funding }) {
   return (
     <div style={card}>
       <h3 style={{ ...sTitle, marginBottom: 14 }}>CEX FUNDING RATES (SOL)</h3>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: 12 }}>
         {[{ label: 'Binance', value: funding.binance }, { label: 'Bybit', value: funding.bybit }].map(({ label, value }) => {
           if (value === null) return null;
           const pct = (value * 100).toFixed(4);
@@ -417,7 +417,7 @@ function TrustScoreCard({ ts }) {
           </div>
         </div>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(150px, 100%), 1fr))', gap: 6, marginTop: 14 }}>
         {ts.factors.map((f, i) => (
           <div key={i} style={{ padding: '6px 10px', background: 'rgba(30,41,59,0.5)', borderRadius: 6 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
@@ -593,7 +593,7 @@ function StatsBar({ oracles, protocols, tvl, alerts }) {
 
   return (
     <div style={{
-      display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20,
+      display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: 20,
     }}>
       {[
         { label: 'SOL', value: `$${solPrice.toFixed(2)}`, color: '#9945FF' },
@@ -634,12 +634,13 @@ export default function App() {
         position: 'sticky', top: 0, zIndex: 100,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{
-            width: 34, height: 34, borderRadius: 8,
-            background: 'linear-gradient(135deg, #06b6d4, #8b5cf6)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 17, fontWeight: 800, color: '#fff',
-          }}>S</div>
+          <img
+            src="/logo.svg"
+            alt="Sentinel"
+            width={34}
+            height={34}
+            style={{ display: 'block', flexShrink: 0 }}
+          />
           <div>
             <h1 style={{ margin: 0, fontSize: 17, fontWeight: 800, letterSpacing: '-0.02em' }}>SENTINEL</h1>
             <span style={{ fontSize: 9, color: '#64748b', ...mono, letterSpacing: '0.08em' }}>SOLANA GOVERNANCE SECURITY LAYER</span>
@@ -691,11 +692,11 @@ export default function App() {
       </nav>
 
       {/* Content */}
-      <main style={{ padding: 24, maxWidth: 1200, margin: '0 auto' }}>
+      <main style={{ padding: 'clamp(12px, 3vw, 24px)', maxWidth: 1200, margin: '0 auto' }}>
         {tab === 'overview' && (
           <>
             <StatsBar oracles={oracles} protocols={protocols} tvl={tvl} alerts={alerts} />
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: 16 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(380px, 100%), 1fr))', gap: 16 }}>
               <CascadeGauge risk={cascadeRisk} />
               <FundingPanel funding={funding} />
               <TVLPanel tvl={tvl} protocols={protocols} />
@@ -711,7 +712,7 @@ export default function App() {
         {tab === 'trust scores' && <GovernanceTrustPanel />}
         {tab === 'alerts' && <AlertFeed alerts={[...REAL_ALERTS, ...DRIFT_HACK_TIMELINE]} title="ALL DETECTED EVENTS" />}
         {tab === 'oracles' && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(380px, 100%), 1fr))', gap: 16 }}>
             <OraclePanel oracles={oracles} />
             <FundingPanel funding={funding} />
           </div>

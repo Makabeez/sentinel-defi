@@ -109,3 +109,7 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
+/* mobile: nothing should scroll sideways */
+html, body { overflow-x: hidden; max-width: 100%; }
+* { min-width: 0; }
