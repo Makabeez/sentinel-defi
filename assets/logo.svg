@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="Sentinel">
+  <title>Sentinel — governance security for Solana DeFi</title>
+  <defs>
+    <style>
+      .ring { fill: none; stroke-width: 9; stroke-linecap: butt; }
+      .idle { stroke: #3A4358; }
+      .signed { stroke: #7C5CFF; }
+      .alert { stroke: #FFB020; }
+    </style>
+  </defs>
+
+  <!-- signer ring: 7 seats -->
+  <g transform="rotate(-90 60 60)">
+    <circle class="ring idle" cx="60" cy="60" r="44" stroke-dasharray="33.494 5.999"/>
+    <!-- 4 seats signed -->
+    <circle class="ring signed" cx="60" cy="60" r="44" stroke-dasharray="33.494 242.966" stroke-dashoffset="0"/>
+    <circle class="ring signed" cx="60" cy="60" r="44" stroke-dasharray="33.494 242.966" stroke-dashoffset="-39.494"/>
+    <circle class="ring signed" cx="60" cy="60" r="44" stroke-dasharray="33.494 242.966" stroke-dashoffset="-78.989"/>
+    <circle class="ring signed" cx="60" cy="60" r="44" stroke-dasharray="33.494 242.966" stroke-dashoffset="-118.483"/>
+    <!-- 1 seat flagged -->
+    <circle class="ring alert" cx="60" cy="60" r="44" stroke-dasharray="33.494 242.966" stroke-dashoffset="-197.472"/>
+  </g>
+
+  <!-- protocol core -->
+  <circle cx="60" cy="60" r="17" fill="#C9D1E3"/>
+  <circle cx="60" cy="60" r="6.5" fill="#0D0F16"/>
+</svg>
+

@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img" aria-label="Sentinel — governance security for Solana DeFi">
+  <title>Sentinel — governance security for Solana DeFi</title>
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0D0F16"/>
+      <stop offset="60%" stop-color="#11141F"/>
+      <stop offset="100%" stop-color="#171226"/>
+    </linearGradient>
+    <linearGradient id="rule" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#7C5CFF" stop-opacity="0.9"/>
+      <stop offset="70%" stop-color="#7C5CFF" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#FFB020" stop-opacity="0.8"/>
+    </linearGradient>
+    <style>
+      .wordmark { font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                  font-weight: 800; font-size: 74px; letter-spacing: 14px; fill: #F2F4F9; }
+      .tag { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+             font-size: 20px; fill: #9AA4BC; letter-spacing: 0.5px; }
+      .meta { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+              font-size: 15px; fill: #5D6784; letter-spacing: 2.5px; }
+      .ring { fill: none; stroke-width: 9; stroke-linecap: butt; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="300" fill="url(#bg)"/>
+
+  <!-- mark -->
+  <g transform="translate(78 90) scale(1.0)">
+    <g transform="rotate(-90 60 60)">
+      <circle class="ring" cx="60" cy="60" r="44" stroke="#3A4358" stroke-dasharray="33.494 5.999"/>
+
+      <circle class="ring" cx="60" cy="60" r="44" stroke="#7C5CFF" stroke-dasharray="33.494 242.966" stroke-dashoffset="0" opacity="1">
+        <animate attributeName="opacity" values="0;1;1" keyTimes="0;0.12;1" dur="6s" begin="0s" repeatCount="indefinite"/>
+      </circle>
+      <circle class="ring" cx="60" cy="60" r="44" stroke="#7C5CFF" stroke-dasharray="33.494 242.966" stroke-dashoffset="-39.494" opacity="1">
+        <animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.08;0.18;1" dur="6s" begin="0s" repeatCount="indefinite"/>
+      </circle>
+      <circle class="ring" cx="60" cy="60" r="44" stroke="#7C5CFF" stroke-dasharray="33.494 242.966" stroke-dashoffset="-78.989" opacity="1">
+        <animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.14;0.24;1" dur="6s" begin="0s" repeatCount="indefinite"/>
+      </circle>
+      <circle class="ring" cx="60" cy="60" r="44" stroke="#7C5CFF" stroke-dasharray="33.494 242.966" stroke-dashoffset="-118.483" opacity="1">
+        <animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.20;0.30;1" dur="6s" begin="0s" repeatCount="indefinite"/>
+      </circle>
+
+      <!-- the seat that changes -->
+      <circle class="ring" cx="60" cy="60" r="44" stroke="#FFB020" stroke-dasharray="33.494 242.966" stroke-dashoffset="-197.472" opacity="1">
+        <animate attributeName="opacity" values="0;0;1;0.35;1;0.35;1;1"
+                 keyTimes="0;0.42;0.48;0.56;0.64;0.72;0.80;1" dur="6s" begin="0s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+
+    <circle cx="60" cy="60" r="17" fill="#C9D1E3"/>
+    <circle cx="60" cy="60" r="6.5" fill="#0D0F16"/>
+  </g>
+
+  <!-- type -->
+  <text class="wordmark" x="222" y="132">SENTINEL</text>
+  <text class="tag" x="226" y="176">Watching the humans behind the smart contracts.</text>
+
+  <line x1="226" y1="206" x2="1120" y2="206" stroke="url(#rule)" stroke-width="2"/>
+
+  <text class="meta" x="226" y="238">SOLANA · GOVERNANCE TRUST SCORES · WALLET RISK · ANOMALY ALERTS</text>
+</svg>
+
