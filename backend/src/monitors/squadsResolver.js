@@ -63,32 +63,43 @@ function saveCache(cache) {
 // Index
 // ---------------------------------------------------------------------------
 
-let vaultIndex = null; // in-process memo, vaultPda -> { multisig, vaultIndex }
+/**
+ * Find which Squads multisig owns each of the given vault addresses.
+ *
+ * Derivation is local maths, so we stream through every multisig and keep ONLY
+ * the addresses we were asked about. Retaining all ~465k derived PDAs in a Map
+ * costs over a gigabyte and pins it for the process lifetime — fatal in a
+ * long-running --watch loop.
+ */
+async function findVaultOwners(connection, targets) {
+  const wanted = new Set(targets);
+  const found = new Map();
 
-async function buildVaultIndex(connection) {
-  if (vaultIndex) return vaultIndex;
-
-  console.log('[squads] building vault index (one getProgramAccounts, keys only)...');
+  console.log('[squads] scanning multisigs (one getProgramAccounts, keys only)...');
   const accounts = await connection.getProgramAccounts(multisig.PROGRAM_ID, {
     dataSlice: { offset: 0, length: 0 },
     filters: [{ memcmp: { offset: 0, bytes: bs58.encode(MULTISIG_DISCRIMINATOR) } }],
   });
 
-  const map = new Map();
   for (const { pubkey } of accounts) {
+    if (found.size === wanted.size) break;
     for (let i = 0; i < VAULT_INDEXES; i++) {
       try {
         const [vault] = multisig.getVaultPda({ multisigPda: pubkey, index: i });
-        map.set(vault.toBase58(), { multisig: pubkey.toBase58(), vaultIndex: i });
+        const key = vault.toBase58();
+        if (wanted.has(key) && !found.has(key)) {
+          found.set(key, { multisig: pubkey.toBase58(), vaultIndex: i });
+        }
       } catch {
         /* skip underivable index */
       }
     }
   }
 
-  console.log(`[squads] indexed ${accounts.length} multisigs → ${map.size} vault PDAs`);
-  vaultIndex = map;
-  return map;
+  console.log(
+    `[squads] scanned ${accounts.length} multisigs, matched ${found.size}/${wanted.size}`
+  );
+  return found;
 }
 
 // ---------------------------------------------------------------------------
@@ -130,8 +141,8 @@ async function resolveVault(connection, authority) {
     return null;
   }
 
-  const index = await buildVaultIndex(connection);
-  const found = index.get(key);
+  const owners = await findVaultOwners(connection, [key]);
+  const found = owners.get(key);
 
   if (!found) {
     cache[key] = { notFound: true, checkedAt: Date.now() };
@@ -151,7 +162,7 @@ async function resolveVault(connection, authority) {
   }
 }
 
-module.exports = { resolveVault, buildVaultIndex, readMultisigConfig, MULTISIG_DISCRIMINATOR };
+module.exports = { resolveVault, findVaultOwners, readMultisigConfig, MULTISIG_DISCRIMINATOR };
 
 // ---------------------------------------------------------------------------
 // CLI — resolve addresses passed as arguments

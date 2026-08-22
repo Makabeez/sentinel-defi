@@ -6,6 +6,7 @@ module.exports = {
     args: '--watch',
     watch: false,
     autorestart: true,
+    max_memory_restart: '400M',
     env: {
       SOLANA_RPC_URL: 'https://api.mainnet-beta.solana.com',
       RPC_DELAY_MS: '2500',
