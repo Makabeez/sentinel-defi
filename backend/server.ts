@@ -228,7 +228,7 @@ async function fetchPythPrices(): Promise<void> {
       const twapKey = symbol;
       const twapArr = PYTH_TWAP.get(twapKey) || [];
       twapArr.push(price);
-      if (twapArr.length > 30) twapArr.shift(); // ~5min at 10s intervals
+      if (twapArr.length > 10) twapArr.shift(); // ~5min at 30s intervals
       PYTH_TWAP.set(twapKey, twapArr);
 
       const twapAvg = twapArr.reduce((a, b) => a + b, 0) / twapArr.length;
@@ -507,11 +507,11 @@ async function runMonitoringLoop(): Promise<void> {
     broadcast({ type: 'tvl', data: Object.fromEntries(tvlHistory) });
   }, 5 * 60 * 1000);
 
-  // Oracle prices: every 10 seconds
+  // Oracle prices: every 30 seconds (sponsored Pyth feeds update on a 60s heartbeat or 0.5% move)
   setInterval(async () => {
     await fetchPythPrices();
     broadcast({ type: 'oracles', data: Object.fromEntries(oracleStatus) });
-  }, 10 * 1000);
+  }, 30 * 1000);
 
   // Funding rates: every 60 seconds
   setInterval(async () => {
