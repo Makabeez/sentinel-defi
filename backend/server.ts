@@ -4,6 +4,8 @@ import axios from 'axios';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import { Connection, PublicKey } from '@solana/web3.js';
+import fs from 'fs';
+import path from 'path';
 
 dotenv.config({ path: __dirname + '/../.env' });
 
@@ -572,135 +574,114 @@ app.get('/api/funding', async (_, res) => {
 // ============================================
 
 // ============================================
-// GOVERNANCE TRUST SCORES
+// GOVERNANCE TRUST SCORES — derived on-chain by src/monitors/trustScore.js
 // ============================================
-interface GovernanceTrustScore {
-  protocol: string;
-  name: string;
-  score: number;
-  tier: string;
-  factors: { label: string; score: number; max: number; detail: string }[];
-  adminPubkey: string;
-  multisigType: string;
-  timelockHours: number;
-  lastAdminChange: string;
-  status: string;
+// The watcher (PM2 `sentinel-trust`) reads upgrade authority, Squads multisig
+// config and timelock from chain state, then publishes a snapshot file. The API
+// only ever serves that snapshot: no hand-typed scores.
+const TRUST_PUBLIC_PATH =
+  process.env.TRUST_PUBLIC_PATH || path.join(__dirname, '.sentinel-trust-scores.json');
+
+interface TrustSnapshot {
+  updatedAt: string | null;
+  protocols: any[];
+  alerts: any[];
 }
 
-const GOVERNANCE_TRUST_SCORES: GovernanceTrustScore[] = [
-  {
-    protocol: 'kamino', name: 'Kamino Finance', score: 88, tier: 'excellent',
-    factors: [
-      { label: 'Multisig', score: 20, max: 25, detail: '3/5 multisig via Squads' },
-      { label: 'Timelock', score: 22, max: 25, detail: '48h timelock' },
-      { label: 'Audits', score: 23, max: 25, detail: '9 independent audits' },
-      { label: 'Activity', score: 23, max: 25, detail: 'No suspicious changes 90+ days' },
-    ],
-    adminPubkey: 'KAMino9rK6Mr1rxWk3Cq3xvGSfoBhqFpBJCMBM6nhz8',
-    multisigType: '3/5 Squads', timelockHours: 48, lastAdminChange: '2025-11-15', status: 'active',
-  },
-  {
-    protocol: 'jupiter-lend', name: 'Jupiter Lend', score: 92, tier: 'excellent',
-    factors: [
-      { label: 'Multisig', score: 23, max: 25, detail: '4/7 multisig via Squads' },
-      { label: 'Timelock', score: 24, max: 25, detail: '72h timelock' },
-      { label: 'Audits', score: 23, max: 25, detail: '7 audits + formally verified' },
-      { label: 'Activity', score: 22, max: 25, detail: 'Transparent governance' },
-    ],
-    adminPubkey: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',
-    multisigType: '4/7 Squads', timelockHours: 72, lastAdminChange: '2026-01-20', status: 'active',
-  },
-  {
-    protocol: 'solend', name: 'Solend', score: 75, tier: 'good',
-    factors: [
-      { label: 'Multisig', score: 19, max: 25, detail: '3/5 multisig' },
-      { label: 'Timelock', score: 18, max: 25, detail: '24h timelock' },
-      { label: 'Audits', score: 20, max: 25, detail: '6 audits' },
-      { label: 'Activity', score: 18, max: 25, detail: 'Stable, no recent changes' },
-    ],
-    adminPubkey: 'So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo',
-    multisigType: '3/5 Multisig', timelockHours: 24, lastAdminChange: '2025-12-01', status: 'active',
-  },
-  {
-    protocol: 'marginfi', name: 'MarginFi', score: 72, tier: 'good',
-    factors: [
-      { label: 'Multisig', score: 18, max: 25, detail: '2/3 multisig' },
-      { label: 'Timelock', score: 15, max: 25, detail: '24h timelock' },
-      { label: 'Audits', score: 20, max: 25, detail: '5 audits' },
-      { label: 'Activity', score: 19, max: 25, detail: 'Key rotated 45 days ago' },
-    ],
-    adminPubkey: 'MRGNWSHaWmz3CPFcYt3Dqt2LBYhQaxDgdBbJbMvhAQi',
-    multisigType: '2/3 Multisig', timelockHours: 24, lastAdminChange: '2026-03-14', status: 'active',
-  },
-  {
-    protocol: 'drift', name: 'Drift Protocol', score: 8, tier: 'critical',
-    factors: [
-      { label: 'Multisig', score: 2, max: 25, detail: '2/5 NO TIMELOCK at exploit' },
-      { label: 'Timelock', score: 0, max: 25, detail: 'REMOVED Mar 27, 2026' },
-      { label: 'Audits', score: 4, max: 25, detail: 'Audits bypassed by admin exploit' },
-      { label: 'Activity', score: 2, max: 25, detail: '$285M drained Apr 1, 2026' },
-    ],
-    adminPubkey: 'DRiFTGejL2AHo2bSTBEzTpCKNerLCGMfrazr6gCh2xKH',
-    multisigType: '2/5 (compromised)', timelockHours: 0, lastAdminChange: '2026-03-27', status: 'frozen',
-  },
-];
-
-// ============================================
-// WALLET SCANNER ENDPOINT
-// ============================================
-app.get('/api/wallet/:address', async (req, res) => {
-  const address = req.params.address;
+function readTrustSnapshot(): TrustSnapshot {
   try {
-    const pubkey = new PublicKey(address);
-    const balance = await connection.getBalance(pubkey);
-    const solBalance = balance / 1e9;
-    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(pubkey, {
-      programId: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'),
-    });
-    const holdings: any[] = [];
-    const exposedProtocols: Set<string> = new Set();
-    for (const account of tokenAccounts.value) {
-      const parsed = account.account.data.parsed?.info;
-      if (!parsed) continue;
-      const amount = parsed.tokenAmount?.uiAmount || 0;
-      if (amount === 0) continue;
-      holdings.push({ mint: parsed.mint, amount });
-    }
-    if (solBalance > 0) {
-      exposedProtocols.add('kamino');
-      exposedProtocols.add('jupiter-lend');
-      exposedProtocols.add('solend');
-      exposedProtocols.add('marginfi');
-    }
-    if (holdings.length > 0) {
-      exposedProtocols.add('kamino');
-      exposedProtocols.add('jupiter-lend');
-    }
-    const exposure = Array.from(exposedProtocols).map(protoId => {
-      const ts = GOVERNANCE_TRUST_SCORES.find(g => g.protocol === protoId);
-      const protoTvl = tvlHistory.get(protoId);
-      const latestTvl = protoTvl?.[protoTvl.length - 1];
-      return {
-        protocol: protoId, name: ts?.name || protoId,
-        trustScore: ts?.score || 0, tier: ts?.tier || 'unknown',
-        multisig: ts?.multisigType || 'unknown', timelockHours: ts?.timelockHours || 0,
-        status: ts?.status || 'unknown', tvl: latestTvl?.tvl || 0,
-      };
-    });
-    const avgTrust = exposure.length > 0 ? exposure.reduce((s, e) => s + e.trustScore, 0) / exposure.length : 100;
-    const hasCritical = exposure.some(e => e.tier === 'critical');
-    let walletRisk = 'low';
-    if (hasCritical) walletRisk = 'critical';
-    else if (avgTrust < 60) walletRisk = 'elevated';
-    else if (avgTrust < 75) walletRisk = 'moderate';
-    res.json({ address, solBalance, totalHoldings: holdings.length, exposure, walletRisk, avgTrustScore: Math.round(avgTrust), timestamp: Date.now() });
-  } catch (err: any) {
-    res.status(400).json({ error: 'Invalid address or scan failed: ' + err.message });
+    return JSON.parse(fs.readFileSync(TRUST_PUBLIC_PATH, 'utf8'));
+  } catch {
+    return { updatedAt: null, protocols: [], alerts: [] };
   }
-});
+}
 
 app.get('/api/trust-scores', (_, res) => {
-  res.json(GOVERNANCE_TRUST_SCORES);
+  const snap = readTrustSnapshot();
+  // Display names come from the registry so the page never shows a raw slug.
+  const protocols = (snap.protocols || []).map((p: any) => ({
+    ...p,
+    name: PROTOCOLS.find((r) => r.id === p.id)?.name || p.name,
+  }));
+  res.json({ source: snap.updatedAt ? 'chain' : 'unavailable', ...snap, protocols });
+});
+
+// ============================================
+// WALLET SCANNER — real positions, read from each protocol's own accounts
+// ============================================
+// Each entry is the protocol's per-user account and the byte offset of the
+// owner field. Verified against live accounts; Jupiter Lend is omitted until
+// its program ID is verified.
+const POSITION_LAYOUTS: { protocol: string; label: string; offset: number; dataSize?: number }[] = [
+  { protocol: 'kamino', label: 'obligation', offset: 64, dataSize: 3344 },
+  { protocol: 'solend', label: 'obligation', offset: 42, dataSize: 1300 },
+  { protocol: 'marginfi', label: 'account', offset: 40 },
+  { protocol: 'drift', label: 'user account', offset: 8 },
+];
+
+app.get('/api/wallet/:address', async (req, res) => {
+  let pubkey: PublicKey;
+  try {
+    pubkey = new PublicKey(req.params.address);
+  } catch {
+    return res.status(400).json({ error: 'That is not a valid Solana address.' });
+  }
+
+  try {
+    const solBalance = (await connection.getBalance(pubkey)) / 1e9;
+    const snap = readTrustSnapshot();
+    const exposure: any[] = [];
+    const unchecked: string[] = [];
+
+    for (const layout of POSITION_LAYOUTS) {
+      const proto = PROTOCOLS.find((p) => p.id === layout.protocol);
+      if (!proto) continue;
+      const filters: any[] = [{ memcmp: { offset: layout.offset, bytes: pubkey.toBase58() } }];
+      if (layout.dataSize) filters.push({ dataSize: layout.dataSize });
+      try {
+        const accounts = await connection.getProgramAccounts(new PublicKey(proto.programId), {
+          dataSlice: { offset: 0, length: 0 },
+          filters,
+        });
+        if (accounts.length === 0) continue;
+        const ts = snap.protocols.find((t) => t.id === layout.protocol);
+        exposure.push({
+          protocol: layout.protocol,
+          name: proto.name,
+          positions: accounts.length,
+          positionKind: layout.label,
+          accounts: accounts.slice(0, 5).map((a) => a.pubkey.toBase58()),
+          trustScore: ts?.score ?? null,
+          tier: ts?.tier ?? 'unknown',
+          model: ts?.model ?? null,
+          threshold: ts?.threshold ?? null,
+          members: ts?.members ?? null,
+          timelockSeconds: ts?.timelockSeconds ?? null,
+        });
+      } catch {
+        unchecked.push(proto.name);
+      }
+    }
+
+    const scored = exposure.filter((e) => e.trustScore != null);
+    const weakest = scored.length ? Math.min(...scored.map((e) => e.trustScore)) : null;
+    let walletRisk = 'none';
+    if (weakest != null) {
+      walletRisk = weakest < 30 ? 'critical' : weakest < 50 ? 'elevated' : weakest < 70 ? 'moderate' : 'low';
+    }
+
+    res.json({
+      address: pubkey.toBase58(),
+      solBalance,
+      exposure,
+      unchecked,
+      weakestScore: weakest,
+      walletRisk,
+      timestamp: Date.now(),
+    });
+  } catch (err: any) {
+    res.status(502).json({ error: 'Could not reach Solana right now. Try again in a minute.' });
+  }
 });
 
 

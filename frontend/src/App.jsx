@@ -1,740 +1,719 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import useSentinel from './useSentinel';
+import Mark from './components/Mark';
+import SeatRing from './components/SeatRing';
+import { API_URL, BONK_CASE, DRIFT_TIMELINE, LINKS } from './data';
+import { ago, controlSentence, day, duration, pct, shortAddr, usd } from './format';
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8081';
-
-// ============================================
-// EMBEDDED DEMO DATA (real snapshots)
-// ============================================
-const DEMO_PROTOCOLS = [
-  { id: 'kamino', name: 'Kamino Finance', type: 'lending', programId: 'KLend2g3cP87ber8vVKTFotQYkqGR2rBZqydXgSF3M6', color: '#FF6B35' },
-  { id: 'marginfi', name: 'MarginFi', type: 'lending', programId: 'MFv2hWf31Z9kbCa1snEPYctwafyhdJB7oS7qJRXYHne', color: '#DCE775' },
-  { id: 'solend', name: 'Solend', type: 'lending', programId: 'So1endDq2YkqhipRh3WViPa8hFSq6z6jK3JAqp9nh6D', color: '#7C4DFF' },
-  { id: 'jupiter-lend', name: 'Jupiter Lend', type: 'lending', programId: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', color: '#00BFA5' },
-  { id: 'drift', name: 'Drift Protocol', type: 'perp-dex', programId: 'dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH', color: '#E040FB', status: 'frozen' },
-];
-
-const DEMO_TVL = {
-  kamino: [{ protocol: 'kamino', tvl: 1827600000, timestamp: Date.now(), change1h: 0.12, change24h: -1.3 }],
-  marginfi: [{ protocol: 'marginfi', tvl: 46700000, timestamp: Date.now(), change1h: -0.08, change24h: -2.1 }],
-  solend: [{ protocol: 'solend', tvl: 72400000, timestamp: Date.now(), change1h: 0.05, change24h: 0.4 }],
-  'jupiter-lend': [{ protocol: 'jupiter-lend', tvl: 939900000, timestamp: Date.now(), change1h: 0.22, change24h: 1.1 }],
-  drift: [{ protocol: 'drift', tvl: 238000000, timestamp: Date.now(), change1h: 0.0, change24h: 0.0 }],
+const TIER_LABEL = {
+  excellent: 'Strong',
+  good: 'Good',
+  fair: 'Fair',
+  weak: 'Weak',
+  critical: 'Critical',
 };
 
-const DEMO_ORACLES = {
-  'SOL/USD': { symbol: 'SOL/USD', price: 84.67, confidence: 0.062, publishTime: Date.now() / 1000, deviationFromTwap: -0.018, status: 'healthy' },
-  'BTC/USD': { symbol: 'BTC/USD', price: 74415.00, confidence: 21.72, publishTime: Date.now() / 1000, deviationFromTwap: 0.004, status: 'healthy' },
-  'ETH/USD': { symbol: 'ETH/USD', price: 2276.42, confidence: 1.19, publishTime: Date.now() / 1000, deviationFromTwap: -0.007, status: 'healthy' },
-  'USDC/USD': { symbol: 'USDC/USD', price: 0.9998, confidence: 0.0005, publishTime: Date.now() / 1000, deviationFromTwap: -0.001, status: 'healthy' },
-  'JUP/USD': { symbol: 'JUP/USD', price: 0.17, confidence: 0.0002, publishTime: Date.now() / 1000, deviationFromTwap: -0.09, status: 'healthy' },
-};
-
-const DEMO_RISK = {
-  protocols: { kamino: 0, marginfi: 5, solend: 0, 'jupiter-lend': 10, drift: 40 },
-  systemAvg: 11, systemMax: 40, level: 'moderate', timestamp: Date.now(),
-};
-
-const DEMO_FUNDING = { binance: -0.00006316, bybit: -0.00010427, timestamp: Date.now() };
-
-const TRUST_SCORES = [
-  { protocol: 'jupiter-lend', name: 'Jupiter Lend', score: 92, tier: 'excellent', multisig: '4/7 Squads', timelockHours: 72, audits: 7, status: 'active', lastAdminChange: '2026-01-20', color: '#00BFA5',
-    factors: [{ label: 'Multisig', score: 23, max: 25, detail: '4/7 multisig via Squads' }, { label: 'Timelock', score: 24, max: 25, detail: '72h timelock' }, { label: 'Audits', score: 23, max: 25, detail: '7 audits + formally verified' }, { label: 'Activity', score: 22, max: 25, detail: 'Transparent governance' }] },
-  { protocol: 'kamino', name: 'Kamino Finance', score: 88, tier: 'excellent', multisig: '3/5 Squads', timelockHours: 48, audits: 9, status: 'active', lastAdminChange: '2025-11-15', color: '#FF6B35',
-    factors: [{ label: 'Multisig', score: 20, max: 25, detail: '3/5 multisig via Squads' }, { label: 'Timelock', score: 22, max: 25, detail: '48h timelock' }, { label: 'Audits', score: 23, max: 25, detail: '9 independent audits' }, { label: 'Activity', score: 23, max: 25, detail: 'No changes in 90+ days' }] },
-  { protocol: 'solend', name: 'Solend', score: 75, tier: 'good', multisig: '3/5 Multisig', timelockHours: 24, audits: 6, status: 'active', lastAdminChange: '2025-12-01', color: '#7C4DFF',
-    factors: [{ label: 'Multisig', score: 19, max: 25, detail: '3/5 multisig' }, { label: 'Timelock', score: 18, max: 25, detail: '24h timelock' }, { label: 'Audits', score: 20, max: 25, detail: '6 audits' }, { label: 'Activity', score: 18, max: 25, detail: 'Stable, no recent changes' }] },
-  { protocol: 'marginfi', name: 'MarginFi', score: 72, tier: 'good', multisig: '2/3 Multisig', timelockHours: 24, audits: 5, status: 'active', lastAdminChange: '2026-03-14', color: '#DCE775',
-    factors: [{ label: 'Multisig', score: 18, max: 25, detail: '2/3 multisig' }, { label: 'Timelock', score: 15, max: 25, detail: '24h timelock' }, { label: 'Audits', score: 20, max: 25, detail: '5 audits' }, { label: 'Activity', score: 19, max: 25, detail: 'Key rotated 45 days ago' }] },
-  { protocol: 'drift', name: 'Drift Protocol', score: 8, tier: 'critical', multisig: '2/5 (compromised)', timelockHours: 0, audits: 4, status: 'frozen', lastAdminChange: '2026-03-27', color: '#E040FB',
-    factors: [{ label: 'Multisig', score: 2, max: 25, detail: '2/5 NO TIMELOCK at exploit' }, { label: 'Timelock', score: 0, max: 25, detail: 'REMOVED Mar 27, 2026' }, { label: 'Audits', score: 4, max: 25, detail: 'Bypassed by admin exploit' }, { label: 'Activity', score: 2, max: 25, detail: '$285M drained Apr 1' }] },
-];
-
-// REAL alerts captured from live backend
-const REAL_ALERTS = [
-  {
-    id: 'real-1', timestamp: new Date('2026-04-19T17:28:28Z').getTime(),
-    severity: 'critical', type: 'oracle_deviation', protocol: 'system',
-    title: 'JUP/USD oracle deviated -5.17% from TWAP',
-    description: 'Current: $0.1587 | TWAP(5m): $0.1673. Potential oracle manipulation or flash crash. Sentinel flagged this automatically.',
-  },
-  {
-    id: 'real-2', timestamp: new Date('2026-04-17T04:21:48Z').getTime(),
-    severity: 'high', type: 'tvl_drop', protocol: 'jupiter-lend',
-    title: 'Jupiter Lend TVL down -8.5% in 1h',
-    description: 'Significant outflow detected on Jupiter Lend. Current TVL dropped from ~$1.03B to ~$939M. Monitoring for cascade effects.',
-  },
-  {
-    id: 'real-3', timestamp: new Date('2026-04-17T04:26:48Z').getTime(),
-    severity: 'high', type: 'tvl_drop', protocol: 'jupiter-lend',
-    title: 'Jupiter Lend TVL down -8.5% in 1h (continued)',
-    description: 'Sustained outflow on Jupiter Lend. No recovery in 5 minutes. Cross-protocol impact being assessed.',
-  },
-];
-
-// Drift hack timeline
-const DRIFT_HACK_TIMELINE = [
-  {
-    id: 'drift-1', timestamp: new Date('2026-03-11T00:00:00Z').getTime(),
-    severity: 'medium', type: 'suspicious_funding', protocol: 'drift',
-    title: 'Suspicious wallet funded via Tornado Cash (10 ETH)',
-    description: 'New wallet received 10 ETH from Tornado Cash, then began interacting with Drift vaults. Sentinel flags all new wallets interacting with monitored protocols within 24h of mixer activity.',
-  },
-  {
-    id: 'drift-2', timestamp: new Date('2026-03-12T09:00:00Z').getTime(),
-    severity: 'low', type: 'new_token_listing', protocol: 'drift',
-    title: 'New token CarbonVote (CVT) deployed with minimal liquidity',
-    description: 'CVT token created with ~$500 in seeded liquidity and wash trading. Sentinel monitors new tokens that appear as collateral on lending/perp protocols.',
-  },
-  {
-    id: 'drift-3', timestamp: new Date('2026-03-27T00:00:00Z').getTime(),
-    severity: 'critical', type: 'governance_change', protocol: 'drift',
-    title: 'CRITICAL: Drift Security Council timelock REMOVED',
-    description: 'Multisig migrated from 3/5 with timelock to 2/5 WITHOUT timelock. This eliminates the detection window for malicious admin actions. Sentinel would have triggered an immediate critical alert.',
-  },
-  {
-    id: 'drift-4', timestamp: new Date('2026-03-28T00:00:00Z').getTime(),
-    severity: 'high', type: 'durable_nonce', protocol: 'drift',
-    title: 'Pre-signed durable nonce transactions detected',
-    description: 'Two admin-level transactions were pre-signed using durable nonces and left dormant. Sentinel monitors durable nonce accounts linked to protocol multisigs.',
-  },
-  {
-    id: 'drift-5', timestamp: new Date('2026-04-01T16:00:00Z').getTime(),
-    severity: 'critical', type: 'exploit_executed', protocol: 'drift',
-    title: 'EXPLOIT: $285M drained from Drift vaults in 12 minutes',
-    description: 'Pre-signed durable nonce transactions executed. Attacker gained Security Council powers, introduced fraudulent withdrawal mechanism, drained $155M JLP, $60M USDC, $11M CBBTC, and more.',
-  },
-  {
-    id: 'drift-6', timestamp: new Date('2026-04-01T16:15:00Z').getTime(),
-    severity: 'critical', type: 'cascade_alert', protocol: 'system',
-    title: 'CASCADE: 12+ protocols exposed to Drift contagion',
-    description: 'Sentinel maps cross-protocol exposure: Reflect Money (paused), Ranger Finance ($900K exposed), PiggyBank ($106K), Project0 (borrowing halted). TVL alerts triggered across Kamino, Jupiter Lend, MarginFi.',
-  },
-];
-
-// ============================================
-// HOOKS
-// ============================================
-function useSentinel() {
-  const [protocols, setProtocols] = useState(DEMO_PROTOCOLS);
-  const [tvl, setTvl] = useState(DEMO_TVL);
-  const [alerts, setAlerts] = useState(REAL_ALERTS);
-  const [oracles, setOracles] = useState(DEMO_ORACLES);
-  const [cascadeRisk, setCascadeRisk] = useState(DEMO_RISK);
-  const [funding, setFunding] = useState(DEMO_FUNDING);
-  const [connected, setConnected] = useState(false);
-  const [mode, setMode] = useState('connecting');
-  const wsRef = useRef(null);
-
-  const connect = useCallback(() => {
-    try {
-      const ws = new WebSocket(WS_URL);
-      wsRef.current = ws;
-      const timeout = setTimeout(() => { if (ws.readyState !== WebSocket.OPEN) { ws.close(); setMode('demo'); } }, 3000);
-      ws.onopen = () => { clearTimeout(timeout); setConnected(true); setMode('live'); };
-      ws.onclose = () => { clearTimeout(timeout); setConnected(false); if (mode !== 'demo') setMode('demo'); };
-      ws.onerror = () => { clearTimeout(timeout); ws.close(); setMode('demo'); };
-      ws.onmessage = (evt) => {
-        const msg = JSON.parse(evt.data);
-        switch (msg.type) {
-          case 'init':
-            setProtocols(msg.data.protocols); setTvl(msg.data.tvl);
-            setAlerts(prev => [...msg.data.alerts, ...REAL_ALERTS].slice(0, 100));
-            setOracles(msg.data.oracles); setCascadeRisk(msg.data.cascadeRisk); break;
-          case 'alert': setAlerts(prev => [msg.data, ...prev].slice(0, 100)); break;
-          case 'tvl': setTvl(msg.data); break;
-          case 'oracles': setOracles(msg.data); break;
-          case 'cascadeRisk': setCascadeRisk(msg.data); break;
-          case 'funding': setFunding(msg.data); break;
-        }
-      };
-    } catch { setMode('demo'); }
-  }, []);
-
+function useTick(ms = 15_000) {
+  const [, set] = useState(0);
   useEffect(() => {
-    if (mode !== 'demo') return;
-    const interval = setInterval(() => {
-      setOracles(prev => {
-        const updated = { ...prev };
-        for (const key of Object.keys(updated)) {
-          const o = { ...updated[key] };
-          o.price = o.price + (Math.random() - 0.5) * 0.002 * o.price;
-          o.deviationFromTwap = o.deviationFromTwap + (Math.random() - 0.5) * 0.01;
-          o.publishTime = Date.now() / 1000;
-          updated[key] = o;
-        }
-        return updated;
-      });
-      setFunding(prev => ({
-        ...prev,
-        binance: prev.binance + (Math.random() - 0.5) * 0.00001,
-        bybit: prev.bybit + (Math.random() - 0.5) * 0.00001,
-        timestamp: Date.now(),
-      }));
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [mode]);
-
-  useEffect(() => { connect(); return () => wsRef.current?.close(); }, [connect]);
-  return { protocols, tvl, alerts, oracles, cascadeRisk, funding, connected, mode };
+    const id = setInterval(() => set((n) => n + 1), ms);
+    return () => clearInterval(id);
+  }, [ms]);
 }
 
-// ============================================
-// STYLES
-// ============================================
-const SEV = { critical: '#ef4444', high: '#f97316', medium: '#eab308', low: '#06b6d4', info: '#64748b' };
-const RISK_C = { critical: '#ef4444', elevated: '#f97316', moderate: '#eab308', low: '#10b981' };
-const card = { background: 'rgba(15,23,42,0.8)', border: '1px solid rgba(51,65,85,0.4)', borderRadius: 12, padding: 20 };
-const mono = { fontFamily: "'JetBrains Mono', monospace" };
-const sTitle = { margin: 0, fontSize: 12, color: '#94a3b8', letterSpacing: '0.12em', ...mono };
-const badge = (bg, color) => ({
-  padding: '3px 10px', borderRadius: 4, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', ...mono,
-  background: bg, color,
-});
+/* ------------------------------------------------------------------ header */
 
-// ============================================
-// COMPONENTS
-// ============================================
-function CascadeGauge({ risk }) {
-  if (!risk) return null;
-  const color = RISK_C[risk.level] || '#64748b';
-  const pct = Math.min(100, risk.systemMax);
+function Header({ mode, lastUpdate }) {
+  useTick();
+  const label =
+    mode === 'live' ? 'Live' : mode === 'offline' ? 'Live data unavailable' : 'Connecting';
   return (
-    <div style={card}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-        <h3 style={sTitle}>CASCADE RISK</h3>
-        <span style={badge(color + '22', color)}>{risk.level}</span>
-      </div>
-      <div style={{ height: 10, background: 'rgba(30,41,59,0.8)', borderRadius: 5, overflow: 'hidden', marginBottom: 16 }}>
-        <div style={{ width: `${pct}%`, height: '100%', borderRadius: 5, background: `linear-gradient(90deg, #10b981 0%, #eab308 50%, #ef4444 100%)`, transition: 'width 1s ease' }} />
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 8 }}>
-        {Object.entries(risk.protocols).map(([id, score]) => {
-          const proto = DEMO_PROTOCOLS.find(p => p.id === id);
-          return (
-            <div key={id} style={{
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              padding: '8px 12px', background: 'rgba(30,41,59,0.5)', borderRadius: 8,
-              borderLeft: `3px solid ${proto?.color || '#475569'}`,
-            }}>
-              <span style={{ fontSize: 11, color: '#cbd5e1', fontWeight: 500 }}>{proto?.name?.split(' ')[0] || id}</span>
-              <span style={{ fontSize: 13, fontWeight: 700, ...mono, color: score > 50 ? '#ef4444' : score > 25 ? '#eab308' : '#10b981' }}>{score}</span>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function OraclePanel({ oracles }) {
-  return (
-    <div style={card}>
-      <h3 style={{ ...sTitle, marginBottom: 14 }}>PYTH ORACLE STATUS</h3>
-      <div style={{ display: 'grid', gap: 8 }}>
-        {Object.entries(oracles).map(([symbol, o]) => {
-          const sc = o.status === 'healthy' ? '#10b981' : o.status === 'stale' ? '#f97316' : '#ef4444';
-          const isUSD = symbol.includes('USDC') || symbol.includes('USDT');
-          return (
-            <div key={symbol} style={{
-              display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
-              background: 'rgba(30,41,59,0.5)', borderRadius: 8, transition: 'background 0.2s',
-            }}>
-              <div style={{ position: 'relative' }}>
-                <div style={{ width: 10, height: 10, borderRadius: '50%', background: sc }} />
-                <div style={{ position: 'absolute', top: -2, left: -2, width: 14, height: 14, borderRadius: '50%', background: sc, opacity: 0.3, animation: 'pulse 2s infinite' }} />
-              </div>
-              <span style={{ fontSize: 13, color: '#e2e8f0', fontWeight: 600, minWidth: 80 }}>{symbol}</span>
-              <span style={{ fontSize: 15, fontWeight: 700, ...mono, color: '#e2e8f0' }}>
-                ${isUSD ? o.price?.toFixed(4) : o.price?.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-              </span>
-              <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
-                <div style={{
-                  fontSize: 11, ...mono,
-                  color: Math.abs(o.deviationFromTwap) > 1 ? '#ef4444' : Math.abs(o.deviationFromTwap) > 0.5 ? '#eab308' : '#64748b',
-                }}>
-                  {o.deviationFromTwap >= 0 ? '+' : ''}{o.deviationFromTwap?.toFixed(3)}% TWAP
-                </div>
-                <div style={{ fontSize: 9, color: '#475569', ...mono }}>
-                  conf: ±${o.confidence?.toFixed(o.confidence < 1 ? 4 : 2)}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function TVLPanel({ tvl, protocols }) {
-  const totalTVL = protocols.reduce((sum, p) => {
-    const h = tvl[p.id] || [];
-    return sum + (h[h.length - 1]?.tvl || 0);
-  }, 0);
-
-  return (
-    <div style={card}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-        <h3 style={sTitle}>PROTOCOL TVL</h3>
-        <span style={{ fontSize: 14, fontWeight: 700, ...mono, color: '#e2e8f0' }}>
-          ${(totalTVL / 1e9).toFixed(2)}B total
-        </span>
-      </div>
-      <div style={{ display: 'grid', gap: 8 }}>
-        {protocols.map(proto => {
-          const history = tvl[proto.id] || [];
-          const latest = history[history.length - 1];
-          if (!latest) return null;
-          const pctOfTotal = (latest.tvl / totalTVL * 100).toFixed(1);
-          return (
-            <div key={proto.id} style={{
-              padding: '12px 14px', background: 'rgba(30,41,59,0.5)', borderRadius: 8,
-              borderLeft: `3px solid ${proto.color}`, opacity: proto.status === 'frozen' ? 0.5 : 1,
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 13, color: '#e2e8f0', fontWeight: 600 }}>{proto.name}</span>
-                  {proto.status === 'frozen' && <span style={badge('rgba(239,68,68,0.2)', '#ef4444')}>FROZEN</span>}
-                </div>
-                <span style={{ fontSize: 15, fontWeight: 700, ...mono, color: '#e2e8f0' }}>
-                  ${(latest.tvl / 1e6).toFixed(1)}M
-                </span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ flex: 1, height: 4, background: 'rgba(51,65,85,0.5)', borderRadius: 2, marginRight: 12 }}>
-                  <div style={{ width: `${pctOfTotal}%`, height: '100%', background: proto.color, borderRadius: 2, transition: 'width 1s' }} />
-                </div>
-                <div style={{ display: 'flex', gap: 12 }}>
-                  <span style={{ fontSize: 10, ...mono, color: latest.change1h >= 0 ? '#10b981' : '#ef4444' }}>
-                    {latest.change1h >= 0 ? '+' : ''}{latest.change1h.toFixed(2)}% 1h
-                  </span>
-                  <span style={{ fontSize: 10, ...mono, color: latest.change24h >= 0 ? '#10b981' : '#ef4444' }}>
-                    {latest.change24h >= 0 ? '+' : ''}{latest.change24h.toFixed(1)}% 24h
-                  </span>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function AlertFeed({ alerts, title, maxHeight }) {
-  return (
-    <div style={card}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-        <h3 style={sTitle}>{title || 'LIVE ALERTS'}</h3>
-        <span style={{ fontSize: 10, ...mono, color: '#475569' }}>{alerts.length} events</span>
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: maxHeight || 500, overflowY: 'auto' }}>
-        {alerts.length === 0 && <div style={{ fontSize: 12, color: '#475569', textAlign: 'center', padding: 30 }}>No alerts — monitoring active</div>}
-        {alerts.map(a => (
-          <div key={a.id} style={{
-            padding: '12px 14px', background: 'rgba(30,41,59,0.5)', borderRadius: 8,
-            borderLeft: `3px solid ${SEV[a.severity]}`, transition: 'background 0.2s',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <span style={badge(SEV[a.severity] + '22', SEV[a.severity])}>{a.severity}</span>
-              <span style={{ fontSize: 10, color: '#475569', ...mono }}>
-                {new Date(a.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} {new Date(a.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-              </span>
-              <span style={{ fontSize: 10, color: '#475569', ...mono, marginLeft: 'auto', background: 'rgba(51,65,85,0.5)', padding: '2px 6px', borderRadius: 3 }}>{a.protocol}</span>
-            </div>
-            <div style={{ fontSize: 13, color: '#e2e8f0', fontWeight: 600, marginBottom: 3 }}>{a.title}</div>
-            <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.5 }}>{a.description}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function FundingPanel({ funding }) {
-  if (!funding) return null;
-  return (
-    <div style={card}>
-      <h3 style={{ ...sTitle, marginBottom: 14 }}>CEX FUNDING RATES (SOL)</h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: 12 }}>
-        {[{ label: 'Binance', value: funding.binance }, { label: 'Bybit', value: funding.bybit }].map(({ label, value }) => {
-          if (value === null) return null;
-          const pct = (value * 100).toFixed(4);
-          const isExtreme = Math.abs(value) > 0.001;
-          const direction = value >= 0 ? 'LONGS PAY' : 'SHORTS PAY';
-          return (
-            <div key={label} style={{ padding: 14, background: 'rgba(30,41,59,0.5)', borderRadius: 8, textAlign: 'center' }}>
-              <div style={{ fontSize: 10, color: '#64748b', ...mono, marginBottom: 6 }}>{label}</div>
-              <div style={{ fontSize: 22, fontWeight: 700, ...mono, color: isExtreme ? '#ef4444' : value >= 0 ? '#10b981' : '#f97316' }}>
-                {value >= 0 ? '+' : ''}{pct}%
-              </div>
-              <div style={{ fontSize: 9, color: '#475569', ...mono, marginTop: 4 }}>{direction} / 8h</div>
-            </div>
-          );
-        })}
-      </div>
-      <div style={{ marginTop: 12, padding: '8px 12px', background: 'rgba(30,41,59,0.3)', borderRadius: 6, fontSize: 10, color: '#64748b', ...mono, lineHeight: 1.5 }}>
-        Extreme funding (&gt;0.1%) signals crowded positioning and elevated liquidation cascade risk. Sentinel correlates CEX funding with on-chain DeFi exposure.
-      </div>
-    </div>
-  );
-}
-
-function TrustScoreRing({ score, size = 80 }) {
-  const radius = (size - 8) / 2;
-  const circ = 2 * Math.PI * radius;
-  const offset = circ - (score / 100) * circ;
-  const color = score >= 80 ? '#10b981' : score >= 60 ? '#eab308' : score >= 30 ? '#f97316' : '#ef4444';
-  return (
-    <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
-      <circle cx={size/2} cy={size/2} r={radius} fill="none" stroke="rgba(51,65,85,0.3)" strokeWidth="4" />
-      <circle cx={size/2} cy={size/2} r={radius} fill="none" stroke={color} strokeWidth="4"
-        strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round" style={{ transition: 'stroke-dashoffset 1s ease' }} />
-      <text x={size/2} y={size/2} textAnchor="middle" dominantBaseline="central" fill={color}
-        fontSize={size > 60 ? "20" : "14"} fontWeight="800" fontFamily="'JetBrains Mono', monospace"
-        style={{ transform: 'rotate(90deg)', transformOrigin: 'center' }}>{score}</text>
-    </svg>
-  );
-}
-
-function TrustScoreCard({ ts }) {
-  const tierColors = { excellent: '#10b981', good: '#06b6d4', moderate: '#eab308', poor: '#f97316', critical: '#ef4444' };
-  const color = tierColors[ts.tier] || '#64748b';
-  return (
-    <div style={{ ...card, borderLeft: `3px solid ${ts.color}`, opacity: ts.status === 'frozen' ? 0.7 : 1 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-        <TrustScoreRing score={ts.score} size={70} />
-        <div style={{ flex: 1 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <span style={{ fontSize: 15, color: '#e2e8f0', fontWeight: 700 }}>{ts.name}</span>
-            <span style={badge(color + '22', color)}>{ts.tier}</span>
-            {ts.status === 'frozen' && <span style={badge('rgba(239,68,68,0.2)', '#ef4444')}>FROZEN</span>}
-          </div>
-          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 6 }}>
-            <span style={{ fontSize: 10, ...mono, color: '#94a3b8' }}>Multisig: <span style={{ color: '#e2e8f0' }}>{ts.multisig}</span></span>
-            <span style={{ fontSize: 10, ...mono, color: '#94a3b8' }}>Timelock: <span style={{ color: ts.timelockHours === 0 ? '#ef4444' : '#e2e8f0' }}>{ts.timelockHours}h</span></span>
-            <span style={{ fontSize: 10, ...mono, color: '#94a3b8' }}>Audits: <span style={{ color: '#e2e8f0' }}>{ts.audits}</span></span>
-          </div>
+    <header className="topbar">
+      <div className="wrap">
+        <a className="brand" href="#top" aria-label="Sentinel home">
+          <Mark animate={false} size={28} />
+          <span className="brand-word">SENTINEL</span>
+        </a>
+        <nav className="nav" aria-label="Sections">
+          <a href="#governance">Governance</a>
+          <a href="#wallet">Check a wallet</a>
+          <a href="#cases">Case files</a>
+          <a href="#markets">Markets</a>
+          <a href="#signals">Signals</a>
+        </nav>
+        <div className="status" data-mode={mode} role="status">
+          <span className="status-dot" aria-hidden="true" />
+          <span>
+            <strong>{label}</strong>
+            {mode === 'live' && lastUpdate ? `, updated ${ago(lastUpdate)}` : ''}
+          </span>
         </div>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(150px, 100%), 1fr))', gap: 6, marginTop: 14 }}>
-        {ts.factors.map((f, i) => (
-          <div key={i} style={{ padding: '6px 10px', background: 'rgba(30,41,59,0.5)', borderRadius: 6 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-              <span style={{ fontSize: 9, color: '#94a3b8', ...mono }}>{f.label}</span>
-              <span style={{ fontSize: 9, color: '#e2e8f0', ...mono }}>{f.score}/{f.max}</span>
-            </div>
-            <div style={{ height: 3, background: 'rgba(51,65,85,0.5)', borderRadius: 2 }}>
-              <div style={{ width: `${(f.score/f.max)*100}%`, height: '100%', borderRadius: 2, background: f.score/f.max >= 0.8 ? '#10b981' : f.score/f.max >= 0.5 ? '#eab308' : '#ef4444' }} />
-            </div>
-            <div style={{ fontSize: 8, color: '#64748b', marginTop: 2 }}>{f.detail}</div>
-          </div>
-        ))}
-      </div>
-      <div style={{ fontSize: 9, ...mono, color: '#475569', marginTop: 10 }}>Last admin change: {ts.lastAdminChange}</div>
-    </div>
+    </header>
   );
 }
 
-function GovernanceTrustPanel() {
-  const sorted = [...TRUST_SCORES].sort((a, b) => b.score - a.score);
-  const avgScore = Math.round(sorted.reduce((s, t) => s + t.score, 0) / sorted.length);
+/* -------------------------------------------------------------------- hero */
+
+function Hero({ trust, trustSource }) {
+  const scored = trust?.protocols?.filter((p) => !p.error) || [];
+  const noDelay = scored.filter((p) => !p.timelockSeconds && p.model !== 'immutable').length;
+  const singleKey = scored.filter((p) => p.model === 'single-key').length;
+
   return (
-    <div>
-      <div style={{ ...card, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 20 }}>
-        <TrustScoreRing score={avgScore} size={90} />
+    <section className="hero" id="top">
+      <div className="wrap">
         <div>
-          <h3 style={{ margin: '0 0 4px', fontSize: 15, color: '#e2e8f0', fontWeight: 700 }}>Solana DeFi Governance Health</h3>
-          <p style={{ margin: '0 0 8px', fontSize: 11, color: '#94a3b8', lineHeight: 1.5 }}>
-            Trust scores based on multisig configuration, timelock duration, audit history, and admin activity. The Drift exploit was enabled by a governance failure — Sentinel monitors the human layer that STRIDE and audits cannot cover.
+          <h1>Who can rewrite the code holding your money?</h1>
+          <p>
+            Sentinel reads the upgrade keys, multisig thresholds and timelocks of Solana lending
+            protocols straight from chain state, scores them, and alerts the moment one gets weaker.
           </p>
-          <div style={{ display: 'flex', gap: 12 }}>
-            <span style={{ fontSize: 10, ...mono, color: '#10b981' }}>{sorted.filter(t => t.tier === 'excellent').length} Excellent</span>
-            <span style={{ fontSize: 10, ...mono, color: '#06b6d4' }}>{sorted.filter(t => t.tier === 'good').length} Good</span>
-            <span style={{ fontSize: 10, ...mono, color: '#ef4444' }}>{sorted.filter(t => t.tier === 'critical').length} Critical</span>
+          <div className="actions">
+            <a className="btn btn-primary" href="#governance">
+              See the scores
+            </a>
+            <a className="btn btn-quiet" href="#wallet">
+              Check a wallet
+            </a>
           </div>
-        </div>
-      </div>
-      <div style={{ display: 'grid', gap: 12 }}>{sorted.map(ts => <TrustScoreCard key={ts.protocol} ts={ts} />)}</div>
-    </div>
-  );
-}
-
-function WalletScanner() {
-  const [address, setAddress] = useState('');
-  const [result, setResult] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const API = import.meta.env.VITE_API_URL || 'http://localhost:8080';
-
-  const scan = async () => {
-    if (!address || address.length < 32) { setError('Enter a valid Solana address'); return; }
-    setLoading(true); setError(''); setResult(null);
-    try {
-      const resp = await fetch(`${API}/api/wallet/${address}`);
-      if (!resp.ok) throw new Error('fail');
-      setResult(await resp.json());
-    } catch {
-      setError('Backend unreachable — showing demo exposure.');
-      setResult({
-        address, solBalance: 12.5, totalHoldings: 3, walletRisk: 'moderate', avgTrustScore: 67,
-        exposure: TRUST_SCORES.filter(t => t.status !== 'frozen').map(t => ({
-          protocol: t.protocol, name: t.name, trustScore: t.score, tier: t.tier,
-          multisig: t.multisig, timelockHours: t.timelockHours, status: t.status,
-        })), timestamp: Date.now(), demo: true,
-      });
-    }
-    setLoading(false);
-  };
-
-  const riskColors = { low: '#10b981', moderate: '#eab308', elevated: '#f97316', critical: '#ef4444' };
-
-  return (
-    <div>
-      <div style={{ ...card, marginBottom: 16 }}>
-        <h3 style={{ ...sTitle, marginBottom: 10 }}>WALLET RISK SCANNER</h3>
-        <p style={{ fontSize: 11, color: '#64748b', margin: '0 0 14px', lineHeight: 1.5 }}>
-          Enter any Solana wallet to scan DeFi exposure and governance trust scores for every protocol the wallet interacts with. See YOUR risk before the next exploit.
-        </p>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input value={address} onChange={e => setAddress(e.target.value)}
-            placeholder="Enter Solana wallet address..."
-            style={{ flex: 1, padding: '10px 14px', background: 'rgba(30,41,59,0.5)', border: '1px solid rgba(51,65,85,0.4)', borderRadius: 8, color: '#e2e8f0', fontSize: 13, ...mono, outline: 'none' }}
-            onKeyDown={e => e.key === 'Enter' && scan()} />
-          <button onClick={scan} disabled={loading} style={{
-            padding: '10px 20px', background: 'linear-gradient(135deg, #06b6d4, #8b5cf6)',
-            border: 'none', borderRadius: 8, color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer', ...mono, opacity: loading ? 0.5 : 1,
-          }}>{loading ? 'SCANNING...' : 'SCAN'}</button>
-        </div>
-        {error && <div style={{ fontSize: 11, color: '#f97316', marginTop: 8 }}>{error}</div>}
-      </div>
-
-      {result && (
-        <div>
-          {result.demo && (
-            <div style={{ padding: '8px 14px', background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)', borderRadius: 8, marginBottom: 12, fontSize: 10, color: '#a78bfa', ...mono }}>
-              Demo mode — showing simulated exposure. Connect to live backend for real wallet scanning.
+          {scored.length > 0 && (
+            <div className="hero-facts">
+              <span>
+                <b className="num">{scored.length}</b> protocols scored on-chain
+              </span>
+              <span>
+                <b className="num">{noDelay}</b> can be upgraded with no delay
+              </span>
+              <span>
+                <b className="num">{singleKey}</b> controlled by a single key
+              </span>
+              {trust?.updatedAt && (
+                <span className="hero-checked">
+                  {trustSource === 'snapshot' ? 'Snapshot from ' : 'Read from chain '}
+                  <b>{trustSource === 'snapshot' ? day(trust.updatedAt) : ago(Date.parse(trust.updatedAt))}</b>
+                </span>
+              )}
             </div>
           )}
-          <div style={{ ...card, marginBottom: 16 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-              <TrustScoreRing score={result.avgTrustScore} size={80} />
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 10, ...mono, color: '#64748b', marginBottom: 4 }}>{result.address.slice(0, 8)}...{result.address.slice(-8)}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                  <span style={{ fontSize: 18, fontWeight: 700, ...mono, color: '#e2e8f0' }}>{result.solBalance.toFixed(2)} SOL</span>
-                  <span style={badge((riskColors[result.walletRisk]||'#64748b')+'22', riskColors[result.walletRisk]||'#64748b')}>RISK: {result.walletRisk}</span>
+        </div>
+        <div className="hero-mark">
+          <Mark />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* -------------------------------------------------------------- governance */
+
+function factorColor(points, max) {
+  const r = max ? points / max : 0;
+  if (r >= 0.75) return 'var(--signed)';
+  if (r >= 0.4) return 'var(--idle)';
+  if (r > 0) return 'var(--flagged)';
+  return 'var(--breach)';
+}
+
+function ProtocolRow({ p }) {
+  const [open, setOpen] = useState(false);
+  const scored = !p.error;
+  const detailId = `detail-${p.id}`;
+
+  return (
+    <article className="protocol" data-open={open}>
+      <button
+        className="protocol-row"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-controls={detailId}
+      >
+        <SeatRing protocol={p} />
+        <div>
+          <h3 className="protocol-name">
+            {p.name}
+            <span className={`tier tier-${scored ? p.tier : 'unscored'}`}>
+              {scored ? TIER_LABEL[p.tier] || p.tier : 'Not scored'}
+            </span>
+          </h3>
+          <p className="protocol-sentence">{controlSentence(p)}</p>
+        </div>
+        <div className="protocol-score">
+          <div className="score-number">
+            {scored ? p.score : '—'}
+            {scored && <small>/100</small>}
+          </div>
+          <svg className="chev" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M3 6l5 5 5-5" fill="none" stroke="currentColor" strokeWidth="1.6" />
+          </svg>
+        </div>
+      </button>
+
+      {open && (
+        <div className="protocol-detail" id={detailId}>
+          <div>
+            {scored ? (
+              p.factors.map((f) => (
+                <div className="factor" key={f.label}>
+                  <span>{f.label}</span>
+                  <span className="num">
+                    {f.points}/{f.max}
+                  </span>
+                  <div className="factor-bar">
+                    <span style={{ width: `${(f.points / f.max) * 100}%`, background: factorColor(f.points, f.max) }} />
+                  </div>
                 </div>
-                <span style={{ fontSize: 10, ...mono, color: '#94a3b8' }}>Exposed to {result.exposure.length} protocols | Avg trust: {result.avgTrustScore}/100</span>
-              </div>
-            </div>
+              ))
+            ) : (
+              <p className="protocol-sentence">
+                The registered address for this protocol is a token mint, not a program. It stays
+                unscored until the real program ID is confirmed on-chain.
+              </p>
+            )}
+            {p.stale && (
+              <p className="footnote">
+                The last check failed ({p.lastError}). Showing the previous verified reading.
+              </p>
+            )}
           </div>
-          <div style={{ display: 'grid', gap: 12 }}>
-            {result.exposure.map(exp => {
-              const ts = TRUST_SCORES.find(t => t.protocol === exp.protocol);
-              return ts ? <TrustScoreCard key={exp.protocol} ts={ts} /> : null;
-            })}
-          </div>
+          <dl className="facts">
+            {p.programId && (
+              <>
+                <dt>Program</dt>
+                <dd>
+                  <a className="addr" href={LINKS.account(p.programId)} target="_blank" rel="noreferrer">
+                    {p.programId}
+                  </a>
+                </dd>
+              </>
+            )}
+            {p.authority && (
+              <>
+                <dt>Upgrade authority</dt>
+                <dd>
+                  <a className="addr" href={LINKS.account(p.authority)} target="_blank" rel="noreferrer">
+                    {p.authority}
+                  </a>
+                </dd>
+              </>
+            )}
+            {p.multisig && (
+              <>
+                <dt>Squads multisig</dt>
+                <dd>
+                  <a className="addr" href={LINKS.account(p.multisig)} target="_blank" rel="noreferrer">
+                    {p.multisig}
+                  </a>
+                </dd>
+              </>
+            )}
+            {scored && (
+              <>
+                <dt>Timelock</dt>
+                <dd>{duration(p.timelockSeconds) || 'None'}</dd>
+              </>
+            )}
+            {p.lastActivity && (
+              <>
+                <dt>Authority last used</dt>
+                <dd>{ago(p.lastActivity * 1000)}</dd>
+              </>
+            )}
+          </dl>
         </div>
       )}
-      {!result && <GovernanceTrustPanel />}
-    </div>
+    </article>
   );
 }
 
-function DriftHackReplay() {
-  return (
-    <div style={card}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-        <h3 style={{ ...sTitle, margin: 0 }}>DRIFT HACK REPLAY</h3>
-        <span style={badge('rgba(239,68,68,0.15)', '#ef4444')}>$285M EXPLOIT</span>
-        <span style={badge('rgba(139,92,246,0.15)', '#8b5cf6')}>DPRK-ATTRIBUTED</span>
-      </div>
-      <p style={{ fontSize: 11, color: '#64748b', margin: '0 0 20px', lineHeight: 1.5 }}>
-        On April 1, 2026, North Korean state hackers (UNC4736) drained $285M from Drift Protocol in 12 minutes.
-        The attack was staged over 3 weeks with multiple on-chain signals. This timeline shows what Sentinel would have detected at each stage.
-      </p>
-      <div style={{ position: 'relative', paddingLeft: 24 }}>
-        <div style={{ position: 'absolute', left: 7, top: 0, bottom: 0, width: 2, background: 'linear-gradient(180deg, #eab308, #ef4444)' }} />
-        {DRIFT_HACK_TIMELINE.map((evt) => (
-          <div key={evt.id} style={{ position: 'relative', marginBottom: 20, paddingLeft: 20 }}>
-            <div style={{
-              position: 'absolute', left: -10, top: 6, width: 14, height: 14, borderRadius: '50%',
-              background: SEV[evt.severity], boxShadow: `0 0 12px ${SEV[evt.severity]}55`,
-              border: '2px solid rgba(6,10,20,0.8)',
-            }} />
-            <div style={{ fontSize: 10, color: '#64748b', ...mono, marginBottom: 4 }}>
-              {new Date(evt.timestamp).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
-              {' '}{new Date(evt.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-            </div>
-            <div style={{
-              padding: '12px 14px', background: 'rgba(30,41,59,0.5)', borderRadius: 8,
-              borderLeft: `3px solid ${SEV[evt.severity]}`,
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                <span style={badge(SEV[evt.severity] + '22', SEV[evt.severity])}>{evt.severity}</span>
-                <span style={{ fontSize: 10, ...mono, color: '#475569' }}>{evt.type}</span>
-              </div>
-              <div style={{ fontSize: 13, color: '#e2e8f0', fontWeight: 600, marginBottom: 4 }}>{evt.title}</div>
-              <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.6 }}>{evt.description}</div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function StatsBar({ oracles, protocols, tvl, alerts }) {
-  const solPrice = oracles['SOL/USD']?.price || 0;
-  const btcPrice = oracles['BTC/USD']?.price || 0;
-  const totalAlerts = alerts.length;
-  const totalTVL = protocols.reduce((s, p) => s + (tvl[p.id]?.[tvl[p.id]?.length - 1]?.tvl || 0), 0);
+function Governance({ trust, trustSource }) {
+  const rows = useMemo(() => {
+    const list = trust?.protocols || [];
+    return [...list].sort((a, b) => {
+      if (a.error && !b.error) return 1;
+      if (!a.error && b.error) return -1;
+      return (a.score ?? 0) - (b.score ?? 0);
+    });
+  }, [trust]);
 
   return (
-    <div style={{
-      display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: 20,
-    }}>
-      {[
-        { label: 'SOL', value: `$${solPrice.toFixed(2)}`, color: '#9945FF' },
-        { label: 'BTC', value: `$${(btcPrice / 1000).toFixed(1)}K`, color: '#F7931A' },
-        { label: 'TOTAL TVL', value: `$${(totalTVL / 1e9).toFixed(2)}B`, color: '#06b6d4' },
-        { label: 'ALERTS', value: totalAlerts.toString(), color: totalAlerts > 0 ? '#f97316' : '#10b981' },
-      ].map(({ label, value, color }) => (
-        <div key={label} style={{
-          background: 'rgba(15,23,42,0.8)', border: '1px solid rgba(51,65,85,0.3)',
-          borderRadius: 10, padding: '14px 16px', textAlign: 'center',
-        }}>
-          <div style={{ fontSize: 20, fontWeight: 700, ...mono, color }}>{value}</div>
-          <div style={{ fontSize: 9, color: '#64748b', letterSpacing: '0.12em', fontWeight: 600, ...mono, marginTop: 2 }}>{label}</div>
+    <section className="section" id="governance">
+      <div className="wrap">
+        <div className="section-head">
+          <h2>Upgrade control, weakest first</h2>
+          <p>
+            Each ring is the real signer set behind a program’s upgrade key. Violet seats are the
+            signatures needed to ship new code. Open a row to see the score breakdown and the
+            accounts it was read from.
+          </p>
         </div>
-      ))}
-    </div>
+
+        {trustSource === 'snapshot' && (
+          <div className="notice" role="note">
+            Live scores are unavailable right now. Showing the last verified snapshot from{' '}
+            {day(trust.updatedAt)}.
+          </div>
+        )}
+
+        {trustSource === 'loading' ? (
+          <p className="empty">Reading governance accounts…</p>
+        ) : (
+          <div className="board">
+            {rows.map((p) => (
+              <ProtocolRow key={p.id || p.name} p={p} />
+            ))}
+          </div>
+        )}
+
+        <p className="board-foot">
+          Scores weigh who holds the upgrade authority (45 points), the timelock before changes land
+          (30) and how recently the authority was used (25). They describe who can replace a
+          program’s code — not who controls its treasury or risk parameters. Audits aren’t scored
+          because they aren’t on-chain.
+        </p>
+      </div>
+    </section>
   );
 }
 
-// ============================================
-// MAIN APP
-// ============================================
-export default function App() {
-  const { protocols, tvl, alerts, oracles, cascadeRisk, funding, connected, mode } = useSentinel();
-  const [tab, setTab] = useState('overview');
+/* ------------------------------------------------------------------ wallet */
 
-  const tabs = ['overview', 'wallet scanner', 'trust scores', 'drift hack replay', 'alerts', 'oracles'];
+function Wallet({ trust }) {
+  const [address, setAddress] = useState('');
+  const [state, setState] = useState({ status: 'idle' });
+
+  const check = async (e) => {
+    e.preventDefault();
+    const a = address.trim();
+    if (a.length < 32 || a.length > 44) {
+      setState({ status: 'error', message: 'Paste a Solana wallet address — 32 to 44 characters.' });
+      return;
+    }
+    setState({ status: 'loading' });
+    try {
+      const res = await fetch(`${API_URL}/api/wallet/${a}`);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'The scan failed.');
+      if (body.weakestScore === undefined) throw new Error('The API is running an older version. Try again later.');
+      setState({ status: 'done', result: body });
+    } catch (err) {
+      setState({
+        status: 'error',
+        message:
+          err instanceof TypeError
+            ? 'Sentinel’s API is unreachable right now, so wallets can’t be checked.'
+            : err.message,
+      });
+    }
+  };
+
+  const byId = Object.fromEntries((trust?.protocols || []).map((p) => [p.id, p]));
+  const r = state.result;
 
   return (
-    <div style={{ minHeight: '100vh', background: '#060a14', color: '#e2e8f0', fontFamily: "'Inter', 'Segoe UI', sans-serif" }}>
-      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <section className="section" id="wallet">
+      <div className="wrap">
+        <div className="section-head">
+          <h2>Check a wallet</h2>
+          <p>
+            Paste an address to find its open positions on Kamino, Solend, MarginFi and Drift, and
+            who can change the code those positions sit in.
+          </p>
+        </div>
 
-      {/* Header */}
-      <header style={{
-        borderBottom: '1px solid rgba(51,65,85,0.3)', padding: '12px 24px',
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        background: 'rgba(6,10,20,0.95)', backdropFilter: 'blur(12px)',
-        position: 'sticky', top: 0, zIndex: 100,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <img
-            src="/logo.svg"
-            alt="Sentinel"
-            width={34}
-            height={34}
-            style={{ display: 'block', flexShrink: 0 }}
+        <form className="scan" onSubmit={check}>
+          <label className="visually-hidden" htmlFor="addr">
+            Solana wallet address
+          </label>
+          <input
+            id="addr"
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            placeholder="Solana wallet address"
+            autoComplete="off"
+            spellCheck="false"
           />
-          <div>
-            <h1 style={{ margin: 0, fontSize: 17, fontWeight: 800, letterSpacing: '-0.02em' }}>SENTINEL</h1>
-            <span style={{ fontSize: 9, color: '#64748b', ...mono, letterSpacing: '0.08em' }}>SOLANA GOVERNANCE SECURITY LAYER</span>
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={badge(
-            mode === 'live' ? 'rgba(16,185,129,0.15)' : 'rgba(139,92,246,0.15)',
-            mode === 'live' ? '#10b981' : '#8b5cf6'
-          )}>
-            {mode === 'live' ? '● LIVE' : mode === 'demo' ? '◆ DEMO' : '○ ...'}
-          </span>
-          {cascadeRisk && <span style={badge((RISK_C[cascadeRisk.level] || '#64748b') + '22', RISK_C[cascadeRisk.level] || '#64748b')}>RISK: {cascadeRisk.level}</span>}
-          <div style={{
-            width: 8, height: 8, borderRadius: '50%',
-            background: connected ? '#10b981' : mode === 'demo' ? '#8b5cf6' : '#ef4444',
-            boxShadow: `0 0 8px ${connected ? 'rgba(16,185,129,0.5)' : 'rgba(139,92,246,0.5)'}`,
-          }} />
-        </div>
-      </header>
-
-      {/* Banner */}
-      <div style={{
-        background: 'rgba(239,68,68,0.06)', borderBottom: '1px solid rgba(239,68,68,0.15)',
-        padding: '8px 24px', display: 'flex', alignItems: 'center', gap: 8,
-      }}>
-        <span style={{ fontSize: 13 }}>⚠</span>
-        <span style={{ fontSize: 11, color: '#fca5a5', ...mono }}>
-          DRIFT PROTOCOL — $285M exploit (Apr 1, 2026). DPRK-attributed (UNC4736). Protocol frozen. See "Drift Hack Replay" tab.
-        </span>
-      </div>
-
-      {/* Tabs */}
-      <nav style={{
-        display: 'flex', gap: 0, padding: '0 24px', borderBottom: '1px solid rgba(51,65,85,0.2)',
-        background: 'rgba(6,10,20,0.6)', overflowX: 'auto',
-      }}>
-        {tabs.map(t => (
-          <button key={t} onClick={() => setTab(t)} style={{
-            padding: '10px 16px', background: 'none', border: 'none', cursor: 'pointer',
-            color: tab === t ? '#06b6d4' : '#64748b',
-            borderBottom: tab === t ? '2px solid #06b6d4' : '2px solid transparent',
-            fontSize: 11, fontWeight: 600, ...mono, textTransform: 'uppercase',
-            letterSpacing: '0.08em', whiteSpace: 'nowrap', transition: 'color 0.2s',
-          }}>
-            {t === 'trust scores' ? '🔐 ' : t === 'drift hack replay' ? '🔴 ' : t === 'wallet scanner' ? '👛 ' : ''}{t}
+          <button className="btn btn-primary" type="submit" disabled={state.status === 'loading'}>
+            {state.status === 'loading' ? 'Checking…' : 'Check wallet'}
           </button>
-        ))}
-      </nav>
+        </form>
+        {state.status === 'error' && <p className="scan-error">{state.message}</p>}
 
-      {/* Content */}
-      <main style={{ padding: 'clamp(12px, 3vw, 24px)', maxWidth: 1200, margin: '0 auto' }}>
-        {tab === 'overview' && (
-          <>
-            <StatsBar oracles={oracles} protocols={protocols} tvl={tvl} alerts={alerts} />
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(380px, 100%), 1fr))', gap: 16 }}>
-              <CascadeGauge risk={cascadeRisk} />
-              <FundingPanel funding={funding} />
-              <TVLPanel tvl={tvl} protocols={protocols} />
-              <OraclePanel oracles={oracles} />
-              <div style={{ gridColumn: '1 / -1' }}>
-                <AlertFeed alerts={alerts} title="DETECTED EVENTS" maxHeight={350} />
+        {r && (
+          <div className="scan-result" aria-live="polite">
+            <div className="scan-summary">
+              <span>
+                Wallet <b className="addr">{shortAddr(r.address)}</b>
+              </span>
+              <span>
+                <b className="num">{r.solBalance.toFixed(2)}</b> SOL
+              </span>
+              <span>
+                <b className="num">{r.exposure.length}</b> protocol{r.exposure.length === 1 ? '' : 's'} with positions
+              </span>
+              {r.weakestScore != null && (
+                <span>
+                  Weakest upgrade control <b className="num">{r.weakestScore}/100</b>
+                </span>
+              )}
+            </div>
+
+            {r.exposure.length === 0 ? (
+              <p className="empty">
+                No open positions on Kamino, Solend, MarginFi or Drift for this wallet.
+              </p>
+            ) : (
+              <div className="board">
+                {r.exposure.map((e) => {
+                  const p = byId[e.protocol] || { ...e, name: e.name, score: e.trustScore };
+                  return (
+                    <div className="protocol" key={e.protocol}>
+                      <div className="protocol-row" style={{ cursor: 'default' }}>
+                        <SeatRing protocol={p} />
+                        <div>
+                          <h3 className="protocol-name">
+                            {e.name}
+                            <span className="tier tier-fair">
+                              {e.positions} {e.positionKind}
+                              {e.positions === 1 ? '' : 's'}
+                            </span>
+                          </h3>
+                          <p className="protocol-sentence">{controlSentence(p)}</p>
+                        </div>
+                        <div className="protocol-score">
+                          <div className="score-number">
+                            {e.trustScore ?? '—'}
+                            {e.trustScore != null && <small>/100</small>}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {r.unchecked?.length > 0 && (
+              <p className="footnote">Couldn’t check {r.unchecked.join(', ')} this time.</p>
+            )}
+            <p className="footnote">Jupiter Lend positions aren’t checked yet.</p>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/* -------------------------------------------------------------- case files */
+
+function Cases() {
+  const b = BONK_CASE;
+  return (
+    <section className="section" id="cases">
+      <div className="wrap">
+        <div className="section-head">
+          <h2>Case files</h2>
+          <p>Two 2026 governance failures, and what was readable on-chain before the money moved.</p>
+        </div>
+
+        <div className="cases">
+          <article className="case">
+            <h3>BonkDAO: the attack was priced in public</h3>
+            <p className="case-sub">Proposal BIP #76, filed 30 June and executed 6 July 2026. About $20M lost.</p>
+            <div className="capture">
+              <div>
+                <div className="ratio num">{b.ratio}×</div>
+                <p className="ratio-caption">
+                  The treasury was worth five times what it cost to buy the vote.
+                </p>
+              </div>
+              <div className="compare">
+                <div className="compare-row">
+                  <header>
+                    <span>Votes needed to pass a proposal</span>
+                    <b className="num">${b.captureCost}M</b>
+                  </header>
+                  <div className="compare-bar">
+                    <span style={{ width: `${(b.captureCost / b.treasury) * 100}%`, background: 'var(--flagged)' }} />
+                  </div>
+                </div>
+                <div className="compare-row">
+                  <header>
+                    <span>Treasury those votes controlled</span>
+                    <b className="num">${b.treasury}M</b>
+                  </header>
+                  <div className="compare-bar">
+                    <span style={{ width: '100%', background: 'var(--idle)' }} />
+                  </div>
+                </div>
+                <p className="footnote">
+                  A 1% approval quorum against BONK’s supply meant {b.votesNeeded} carried a
+                  proposal. No timelock stood between the vote and the transfer.
+                </p>
               </div>
             </div>
-          </>
-        )}
-        {tab === 'drift hack replay' && <DriftHackReplay />}
-        {tab === 'wallet scanner' && <WalletScanner />}
-        {tab === 'trust scores' && <GovernanceTrustPanel />}
-        {tab === 'alerts' && <AlertFeed alerts={[...REAL_ALERTS, ...DRIFT_HACK_TIMELINE]} title="ALL DETECTED EVENTS" />}
-        {tab === 'oracles' && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(380px, 100%), 1fr))', gap: 16 }}>
-            <OraclePanel oracles={oracles} />
-            <FundingPanel funding={funding} />
+            <p className="case-note">
+              The same DAO ran a second governance with a 10% quorum. Capture there cost twice the
+              prize ({b.strictRatio}×), so nobody tried. One config field was the whole difference.{' '}
+              <a href={LINKS.realm(b.realm)} target="_blank" rel="noreferrer">
+                Open the realm on Realms
+              </a>
+            </p>
+          </article>
+
+          <article className="case">
+            <h3>Drift: the timelock went first</h3>
+            <p className="case-sub">Four on-chain signals in the three weeks before $285M was drained on 1 April 2026.</p>
+            <ol className="timeline">
+              {DRIFT_TIMELINE.map((e) => (
+                <li key={e.date + e.title}>
+                  <time dateTime={e.date}>{day(e.date)}</time>
+                  <span className="tl-rail" aria-hidden="true">
+                    <i style={{ background: e.critical ? 'var(--breach)' : 'var(--idle)' }} />
+                  </span>
+                  <div className="tl-body">
+                    <h4>{e.title}</h4>
+                    <p>{e.body}</p>
+                    {e.flag && <span className="tl-flag">Sentinel flags: {e.flag}</span>}
+                  </div>
+                </li>
+              ))}
+            </ol>
+            <p className="case-note">
+              The 27 March change — a threshold lowered and a timelock removed — is exactly what
+              Sentinel’s watcher checks every hour, and it alerts on both.
+            </p>
+          </article>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ----------------------------------------------------------------- markets */
+
+function Markets({ oracles, tvl, protocols, funding }) {
+  useTick(5_000);
+  const feeds = Object.values(oracles || {});
+  const rows = protocols
+    .map((p) => {
+      const h = tvl[p.id] || [];
+      return { ...p, latest: h[h.length - 1] };
+    })
+    .filter((p) => p.latest)
+    .sort((a, b) => b.latest.tvl - a.latest.tvl);
+  const max = Math.max(1, ...rows.map((r) => r.latest.tvl));
+
+  return (
+    <section className="section" id="markets">
+      <div className="wrap">
+        <div className="section-head">
+          <h2>Market signals</h2>
+          <p>
+            Prices are read from Pyth’s price accounts on Solana — the same data the lending
+            protocols consume. A feed that drifts from its five-minute average or stops updating
+            raises a signal.
+          </p>
+        </div>
+
+        <div className="markets">
+          <div>
+            <h3 className="panel-title">
+              Oracle prices <span>Pyth, on-chain</span>
+            </h3>
+            {feeds.length === 0 ? (
+              <p className="empty">Waiting for the first oracle read.</p>
+            ) : (
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th scope="col">Feed</th>
+                    <th scope="col" className="r">
+                      Price
+                    </th>
+                    <th scope="col" className="r">
+                      vs 5-min avg
+                    </th>
+                    <th scope="col" className="r">
+                      Age
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {feeds.map((o) => {
+                    const dev = o.deviationFromTwap ?? 0;
+                    const dot = o.status === 'healthy' ? '' : o.status === 'stale' ? 'dot-warn' : 'dot-bad';
+                    return (
+                      <tr key={o.symbol}>
+                        <td className="sym">
+                          <span className={`dot ${dot}`} aria-hidden="true" />
+                          {o.symbol}
+                          <span className="visually-hidden">, {o.status}</span>
+                        </td>
+                        <td className="r num">{usd(o.price, o.price < 2 ? 4 : 2)}</td>
+                        <td className={`r num ${Math.abs(dev) > 0.5 ? 'neg' : ''}`}>{pct(dev, 3)}</td>
+                        <td className="r num">{ago(o.publishTime * 1000)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
           </div>
-        )}
+
+          <div>
+            <h3 className="panel-title">
+              Deposits <span>DefiLlama TVL</span>
+            </h3>
+            {rows.length === 0 ? (
+              <p className="empty">Waiting for TVL data.</p>
+            ) : (
+              rows.map((p) => (
+                <div className="tvl-row" key={p.id}>
+                  <span className="name">{p.name}</span>
+                  <span className="num">
+                    {usd(p.latest.tvl)}
+                    {p.latest.change24h ? (
+                      <span className={p.latest.change24h >= 0 ? 'pos' : 'neg'}>
+                        {' '}
+                        {pct(p.latest.change24h, 1)}
+                      </span>
+                    ) : null}
+                  </span>
+                  <div className="tvl-bar">
+                    <span style={{ width: `${(p.latest.tvl / max) * 100}%` }} />
+                  </div>
+                </div>
+              ))
+            )}
+            {funding && (funding.binance != null || funding.bybit != null) ? (
+              <>
+                <div className="funding">
+                  {funding.binance != null && (
+                    <div>
+                      SOL funding, Binance
+                      <b className="num">{pct(funding.binance * 100, 4)}</b>
+                    </div>
+                  )}
+                  {funding.bybit != null && (
+                    <div>
+                      SOL funding, Bybit
+                      <b className="num">{pct(funding.bybit * 100, 4)}</b>
+                    </div>
+                  )}
+                </div>
+                <p className="footnote">
+                  Funding is per 8 hours. Above 0.1% means crowded positioning and higher liquidation
+                  risk across lending markets.
+                </p>
+              </>
+            ) : (
+              <p className="footnote">Funding rates are unavailable right now.</p>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ----------------------------------------------------------------- signals */
+
+function normalize(alerts, governance) {
+  const fromFeed = (alerts || []).map((a) => ({
+    key: a.id || `${a.type}-${a.timestamp}`,
+    time: a.timestamp,
+    severity: a.severity,
+    title: a.title,
+    body: a.description,
+  }));
+  const fromGov = (governance || []).map((a) => ({
+    key: `${a.code}-${a.programId}-${a.detectedAt}`,
+    time: Date.parse(a.detectedAt),
+    severity: a.severity,
+    title: a.code
+      ?.toLowerCase()
+      .replace(/_/g, ' ')
+      .replace(/^./, (c) => c.toUpperCase()),
+    body: a.message,
+  }));
+  return [...fromGov, ...fromFeed].sort((a, b) => b.time - a.time).slice(0, 40);
+}
+
+function Signals({ alerts, trust }) {
+  useTick(30_000);
+  const items = normalize(alerts, trust?.alerts);
+  return (
+    <section className="section" id="signals">
+      <div className="wrap">
+        <div className="section-head">
+          <h2>Signals</h2>
+          <p>
+            Governance changes, oracle deviations and liquidity drops, newest first. Critical
+            governance changes also go out on Telegram.
+          </p>
+        </div>
+        <div className="feed">
+          {items.length === 0 ? (
+            <p className="empty">
+              Nothing to report. Sentinel checks oracles every 30 seconds and governance every hour;
+              anything that weakens a protocol shows up here.
+            </p>
+          ) : (
+            items.map((s) => (
+              <div className="signal" key={s.key}>
+                <time dateTime={new Date(s.time).toISOString()}>{ago(s.time)}</time>
+                <div>
+                  <h4>
+                    <span className={`sev sev-${s.severity}`}>
+                      {s.severity?.[0].toUpperCase() + s.severity?.slice(1)}
+                    </span>
+                    {s.title}
+                  </h4>
+                  {s.body && <p>{s.body}</p>}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ footer */
+
+function Footer() {
+  return (
+    <footer className="footer">
+      <div className="wrap">
+        <span>Sentinel is open source and reads only public chain data. Built by @Makabeez.</span>
+        <nav aria-label="Elsewhere">
+          <a href={LINKS.repo} target="_blank" rel="noreferrer">
+            GitHub
+          </a>
+          <a href={LINKS.x} target="_blank" rel="noreferrer">
+            X
+          </a>
+        </nav>
+      </div>
+    </footer>
+  );
+}
+
+export default function App() {
+  const s = useSentinel();
+  return (
+    <>
+      <Header mode={s.mode} lastUpdate={s.lastUpdate} />
+      <main>
+        <Hero trust={s.trust} trustSource={s.trustSource} />
+        <Governance trust={s.trust} trustSource={s.trustSource} />
+        <Wallet trust={s.trust} />
+        <Cases />
+        <Markets oracles={s.oracles} tvl={s.tvl} protocols={s.protocols} funding={s.funding} />
+        <Signals alerts={s.alerts} trust={s.trust} />
       </main>
-
-      {/* Footer */}
-      <footer style={{ textAlign: 'center', padding: 20, fontSize: 10, color: '#334155', ...mono }}>
-        Sentinel v2.0 — Solana Governance Security Layer — Frontier Hackathon 2026 — @Makabeez —{' '}
-        <a href="https://github.com/Makabeez/sentinel-defi" target="_blank" rel="noreferrer" style={{ color: '#475569' }}>GitHub</a>
-        {' | '}
-        <a href="https://x.com/geiserjoe2" target="_blank" rel="noreferrer" style={{ color: '#475569' }}>X/Twitter</a>
-      </footer>
-
-      <style>{`
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-        * { box-sizing: border-box; }
-        ::-webkit-scrollbar { width: 4px; }
-        ::-webkit-scrollbar-track { background: rgba(15,23,42,0.5); }
-        ::-webkit-scrollbar-thumb { background: rgba(51,65,85,0.5); border-radius: 2px; }
-        button:hover { color: #06b6d4 !important; }
-      `}</style>
-    </div>
+      <Footer />
+    </>
   );
 }

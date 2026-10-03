@@ -49,6 +49,10 @@ const SENTINEL_API = process.env.SENTINEL_API || 'http://localhost:8080';
 const STATE_PATH =
   process.env.TRUST_STATE_PATH || path.join(__dirname, '../../.sentinel-trust-state.json');
 const POLL_INTERVAL = Number(process.env.TRUST_POLL_INTERVAL || 15 * 60 * 1000);
+// Public snapshot read by the API and dashboard. Separate from the diff state so
+// the dashboard can never corrupt the change-detection baseline.
+const PUBLIC_PATH =
+  process.env.TRUST_PUBLIC_PATH || path.join(__dirname, '../../.sentinel-trust-scores.json');
 const RPC_DELAY_MS = Number(process.env.RPC_DELAY_MS || 250);
 
 const SYSTEM_PROGRAM = '11111111111111111111111111111111';
@@ -369,6 +373,7 @@ async function scoreProgram(connection, { id, name, programId }) {
     threshold: cls.threshold ?? null,
     members: cls.members ?? null,
     timelockSeconds: cls.timelockSeconds ?? 0,
+    multisig: cls.multisig ?? null,
     lastDeploySlot,
     lastActivity: lastActivity.status === 'ok' ? lastActivity.blockTime : null,
     factors,
@@ -563,7 +568,58 @@ async function runOnce(connection, registry, { alerting }) {
   }
 
   saveState(state);
+  publishSnapshot(results, alerts);
   return { results, alerts };
+}
+
+/**
+ * Write the dashboard-facing snapshot: every protocol's latest result plus a
+ * rolling list of governance alerts. A protocol whose read failed this pass
+ * keeps its previous good result, marked stale, instead of disappearing.
+ */
+function publishSnapshot(results, newAlerts) {
+  let prev = { protocols: [], alerts: [] };
+  try {
+    prev = JSON.parse(fs.readFileSync(PUBLIC_PATH, 'utf8'));
+  } catch {
+    /* first run */
+  }
+  const prevById = new Map((prev.protocols || []).map((p) => [p.programId, p]));
+
+  const protocols = results.map((r) => {
+    if (!r.error) {
+      return {
+        id: r.id,
+        name: r.name,
+        programId: r.programId,
+        score: r.score,
+        tier: r.tier,
+        model: r.model,
+        authority: r.authority,
+        multisig: r.multisig,
+        threshold: r.threshold,
+        members: r.members,
+        timelockSeconds: r.timelockSeconds,
+        lastActivity: r.lastActivity,
+        lastDeploySlot: r.lastDeploySlot,
+        factors: r.factors.map((f) => ({ label: f.label, points: f.points, max: f.max })),
+        scoredAt: r.scoredAt,
+      };
+    }
+    const old = prevById.get(r.programId);
+    if (old && old.score != null) return { ...old, stale: true, lastError: r.error };
+    return { id: r.id, name: r.name, programId: r.programId, error: r.error, scoredAt: r.scoredAt };
+  });
+
+  const alerts = [...newAlerts, ...(prev.alerts || [])].slice(0, 50);
+  try {
+    fs.writeFileSync(
+      PUBLIC_PATH,
+      JSON.stringify({ updatedAt: new Date().toISOString(), protocols, alerts }, null, 2)
+    );
+  } catch (err) {
+    console.warn(`[trust] could not publish snapshot: ${err.message}`);
+  }
 }
 
 function printTable(results) {
