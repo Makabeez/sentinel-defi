@@ -121,6 +121,8 @@ const PYTH_FEEDS: Record<string, string> = {
 };
 
 const PYTH_TWAP: Map<string, number[]> = new Map();
+// Pyth push oracle: sponsored price feed accounts on Solana (shard 0), continuously updated by Pyth
+const PYTH_PUSH_ORACLE = new PublicKey('pythWSnswVUd12oZpeFP8e9CVaEqJg25g1Vtc2biRsT');
 
 // ============================================
 // SOLANA CONNECTION
@@ -191,13 +193,26 @@ async function fetchAllTVLs(): Promise<void> {
 // ============================================
 async function fetchPythPrices(): Promise<void> {
   try {
-    const ids = Object.values(PYTH_FEEDS);
-    const resp = await axios.get('https://hermes.pyth.network/api/latest_price_feeds', {
-      params: { ids },
-      timeout: 10000,
+    // Read Pyth's sponsored feed accounts on-chain: no API key, and it is exactly
+    // what Solana protocols consume. One batched RPC call for all feeds.
+    const ids = Object.values(PYTH_FEEDS).map((id) => id.replace(/^0x/, ''));
+    const keys = ids.map((id) => {
+      const shard = Buffer.alloc(2); shard.writeUInt16LE(0);
+      return PublicKey.findProgramAddressSync([shard, Buffer.from(id, 'hex')], PYTH_PUSH_ORACLE)[0];
     });
-
-    const parsed = Array.isArray(resp.data) ? resp.data : [];
+    const accs = await connection.getMultipleAccountsInfo(keys);
+    const parsed = accs.map((a, i) => {
+      if (!a) return null;
+      const d = a.data; let o = 40;                 // discriminator + write_authority
+      o += d[o] === 0 ? 2 : 1;                      // verification_level
+      if (d.subarray(o, o + 32).toString('hex') !== ids[i]) return null;
+      o += 32;
+      const price = d.readBigInt64LE(o).toString(); o += 8;
+      const conf = d.readBigUInt64LE(o).toString(); o += 8;
+      const expo = d.readInt32LE(o); o += 4;
+      const publish_time = Number(d.readBigInt64LE(o));
+      return { price: { price, conf, expo, publish_time } };
+    });
     const symbols = Object.keys(PYTH_FEEDS);
 
     for (let i = 0; i < parsed.length; i++) {
@@ -207,7 +222,7 @@ async function fetchPythPrices(): Promise<void> {
       const symbol = symbols[i];
       const price = parseFloat(p.price) * Math.pow(10, p.expo);
       const confidence = parseFloat(p.conf) * Math.pow(10, p.expo);
-      const publishTime = parsed[i].price.publish_time;
+      const publishTime = p.publish_time;
 
       // TWAP tracking (5min window)
       const twapKey = symbol;
@@ -219,7 +234,7 @@ async function fetchPythPrices(): Promise<void> {
       const twapAvg = twapArr.reduce((a, b) => a + b, 0) / twapArr.length;
       const deviationFromTwap = ((price - twapAvg) / twapAvg) * 100;
 
-      const isStale = Date.now() / 1000 - publishTime > 60;
+      const isStale = Date.now() / 1000 - publishTime > 120; // sponsored heartbeat is 60s
       const isDeviated = Math.abs(deviationFromTwap) > 5;
 
       let status: OracleStatus['status'] = 'healthy';
