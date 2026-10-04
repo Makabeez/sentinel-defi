@@ -391,18 +391,27 @@ async function loadRegistry(programsArg) {
       return { id: (name || programId).toLowerCase(), name: name || programId, programId };
     });
   }
-  try {
-    const res = await fetch(`${SENTINEL_API}/api/protocols`);
-    const list = await res.json();
-    return list
-      .filter((p) => p.programId)
-      .map((p) => ({ id: p.id, name: p.name, programId: p.programId }));
-  } catch (err) {
-    throw new Error(
-      `could not load registry from ${SENTINEL_API}/api/protocols (${err.message}). ` +
-        'Pass --programs <id>[:name],... instead.'
-    );
+  // The API and this watcher start together under PM2, and the API takes a
+  // few seconds to boot, so wait for it instead of exiting on the first miss.
+  const attempts = Number(process.env.REGISTRY_RETRIES || 24);
+  let lastErr;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      const res = await fetch(`${SENTINEL_API}/api/protocols`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const list = await res.json();
+      return list
+        .filter((p) => p.programId)
+        .map((p) => ({ id: p.id, name: p.name, programId: p.programId }));
+    } catch (err) {
+      lastErr = err;
+      if (i < attempts) await sleep(5000);
+    }
   }
+  throw new Error(
+    `could not load registry from ${SENTINEL_API}/api/protocols (${lastErr.message}). ` +
+      'Pass --programs <id>[:name],... instead.'
+  );
 }
 
 // ---------------------------------------------------------------------------
