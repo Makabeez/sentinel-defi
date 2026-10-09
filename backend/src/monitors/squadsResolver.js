@@ -102,6 +102,52 @@ async function findVaultOwners(connection, targets) {
   return found;
 }
 
+/**
+ * Cheap path: a vault signs through Squads, so the transactions it appears in
+ * also carry its parent multisig account. Read the vault's recent history,
+ * keep accounts owned by the Squads program with the Multisig discriminator,
+ * and confirm by deriving their vault PDAs. A handful of RPC calls instead of
+ * downloading every multisig, which needs ~500 MB on a busy node.
+ */
+async function findVaultOwnerFromHistory(connection, key, { maxTx = 6 } = {}) {
+  const authority = new PublicKey(key);
+  const sigs = await connection.getSignaturesForAddress(authority, { limit: 25 });
+  const checked = new Set();
+  let read = 0;
+
+  for (const { signature, err } of sigs) {
+    if (err || read >= maxTx) continue;
+    read++;
+    const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+    if (!tx) continue;
+    const msg = tx.transaction.message;
+    const keys = [
+      ...(msg.staticAccountKeys || msg.accountKeys || []),
+      ...(tx.meta?.loadedAddresses?.writable || []),
+      ...(tx.meta?.loadedAddresses?.readonly || []),
+    ]
+      .map((k) => (typeof k === 'string' ? k : k.toBase58()))
+      .filter((k) => k !== key && !checked.has(k));
+    keys.forEach((k) => checked.add(k));
+
+    for (let i = 0; i < keys.length; i += 100) {
+      const batch = keys.slice(i, i + 100);
+      const infos = await connection.getMultipleAccountsInfo(batch.map((k) => new PublicKey(k)));
+      for (let j = 0; j < batch.length; j++) {
+        const info = infos[j];
+        if (!info || !info.owner.equals(multisig.PROGRAM_ID)) continue;
+        if (!info.data.subarray(0, 8).equals(MULTISIG_DISCRIMINATOR)) continue;
+        const multisigPda = new PublicKey(batch[j]);
+        for (let v = 0; v < VAULT_INDEXES; v++) {
+          const [vault] = multisig.getVaultPda({ multisigPda, index: v });
+          if (vault.toBase58() === key) return { multisig: batch[j], vaultIndex: v };
+        }
+      }
+    }
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Resolution
 // ---------------------------------------------------------------------------
@@ -141,8 +187,17 @@ async function resolveVault(connection, authority) {
     return null;
   }
 
-  const owners = await findVaultOwners(connection, [key]);
-  const found = owners.get(key);
+  let found = null;
+  try {
+    found = await findVaultOwnerFromHistory(connection, key);
+  } catch (err) {
+    console.warn(`[squads] history lookup failed: ${err.message}`);
+  }
+  if (found) {
+    console.log(`[squads] resolved ${key} from its transaction history`);
+  } else if (process.env.SQUADS_FULL_SCAN !== '0') {
+    found = (await findVaultOwners(connection, [key])).get(key);
+  }
 
   if (!found) {
     cache[key] = { notFound: true, checkedAt: Date.now() };
@@ -162,7 +217,13 @@ async function resolveVault(connection, authority) {
   }
 }
 
-module.exports = { resolveVault, findVaultOwners, readMultisigConfig, MULTISIG_DISCRIMINATOR };
+module.exports = {
+  resolveVault,
+  findVaultOwners,
+  findVaultOwnerFromHistory,
+  readMultisigConfig,
+  MULTISIG_DISCRIMINATOR,
+};
 
 // ---------------------------------------------------------------------------
 // CLI — resolve addresses passed as arguments
