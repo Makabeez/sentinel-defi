@@ -49,7 +49,9 @@ const PROTOCOLS: Protocol[] = [
     id: 'jupiter-lend',
     name: 'Jupiter Lend',
     type: 'lending',
-    programId: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',
+    // Liquidity layer: holds every deposit behind Jupiter Earn and Vaults.
+    // Earn, Vaults and Liquidity share one upgrade authority (Squads v4).
+    programId: 'jupeiUmn818Jg1ekPURTpr4mFo29p46vygyykFJ3wZC',
     tvlApi: 'https://api.llama.fi/tvl/jupiter-lend',
     color: '#00BFA5',
   },
@@ -610,14 +612,79 @@ app.get('/api/trust-scores', (_, res) => {
 // WALLET SCANNER — real positions, read from each protocol's own accounts
 // ============================================
 // Each entry is the protocol's per-user account and the byte offset of the
-// owner field. Verified against live accounts; Jupiter Lend is omitted until
-// its program ID is verified.
+// owner field. Verified against live accounts. Jupiter Lend has no owner field
+// (Earn deposits are jlTokens, borrows are position NFTs) and is handled below.
 const POSITION_LAYOUTS: { protocol: string; label: string; offset: number; dataSize?: number }[] = [
   { protocol: 'kamino', label: 'obligation', offset: 64, dataSize: 3344 },
   { protocol: 'solend', label: 'obligation', offset: 42, dataSize: 1300 },
   { protocol: 'marginfi', label: 'account', offset: 40 },
   { protocol: 'drift', label: 'user account', offset: 8 },
 ];
+
+// Jupiter Lend (program addresses from developers.jup.ag/docs/lend/program-addresses)
+const JUP_EARN = new PublicKey('jup3YeL8QhtSx1e253b2FDvsMNC87fDrgQZivbrndc9');
+const JUP_VAULTS = new PublicKey('jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi');
+const TOKEN_PROGRAMS = [
+  new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'),
+  new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'),
+];
+// Both indexes are refreshed hourly in the background so a wallet check costs
+// two token-account reads instead of a getProgramAccounts call per NFT, which
+// public RPCs rate-limit hard.
+let jupIndex: { at: number; jlMints: Set<string>; positions: Map<string, string> } | null = null;
+let jupIndexLoading: Promise<void> | null = null;
+
+async function refreshJupiterIndex(): Promise<void> {
+  // Earn "lending" accounts (196 bytes): jlToken mint at offset 40.
+  const earn = await connection.getProgramAccounts(JUP_EARN, {
+    filters: [{ dataSize: 196 }],
+    dataSlice: { offset: 40, length: 32 },
+  });
+  // Vaults position accounts (71 bytes): position NFT mint at offset 14.
+  const vaults = await connection.getProgramAccounts(JUP_VAULTS, {
+    filters: [{ dataSize: 71 }],
+    dataSlice: { offset: 14, length: 32 },
+  });
+  jupIndex = {
+    at: Date.now(),
+    jlMints: new Set(earn.map((a) => new PublicKey(a.account.data).toBase58())),
+    positions: new Map(vaults.map((v) => [new PublicKey(v.account.data).toBase58(), v.pubkey.toBase58()])),
+  };
+  console.log(`[jupiter] indexed ${jupIndex.jlMints.size} earn markets, ${jupIndex.positions.size} borrow positions`);
+}
+
+async function jupiterIndex() {
+  const stale = !jupIndex || Date.now() - jupIndex.at > 3600_000;
+  if (stale && !jupIndexLoading) {
+    jupIndexLoading = refreshJupiterIndex().finally(() => {
+      jupIndexLoading = null;
+    });
+  }
+  if (!jupIndex) await jupIndexLoading;
+  if (!jupIndex) throw new Error('Jupiter Lend index unavailable');
+  return jupIndex;
+}
+
+setTimeout(() => jupiterIndex().catch((e) => console.error('[jupiter] index failed:', e.message)), 15_000);
+
+// Earn deposits are jlToken balances; borrow positions are NFTs whose mint
+// matches a Vaults position account.
+async function jupiterLendPositions(owner: PublicKey) {
+  const index = await jupiterIndex();
+  const earn: string[] = [];
+  const borrow: string[] = [];
+  for (const programId of TOKEN_PROGRAMS) {
+    const { value } = await connection.getParsedTokenAccountsByOwner(owner, { programId });
+    for (const t of value) {
+      const info: any = (t.account.data as any).parsed?.info;
+      if (!info || info.tokenAmount.amount === '0') continue;
+      if (index.jlMints.has(info.mint)) earn.push(t.pubkey.toBase58());
+      const position = index.positions.get(info.mint);
+      if (position) borrow.push(position);
+    }
+  }
+  return { earn, borrow };
+}
 
 app.get('/api/wallet/:address', async (req, res) => {
   let pubkey: PublicKey;
@@ -660,6 +727,37 @@ app.get('/api/wallet/:address', async (req, res) => {
         });
       } catch {
         unchecked.push(proto.name);
+      }
+    }
+
+    const jupiter = PROTOCOLS.find((p) => p.id === 'jupiter-lend');
+    if (jupiter) {
+      try {
+        const { earn, borrow } = await jupiterLendPositions(pubkey);
+        if (earn.length || borrow.length) {
+          const ts = snap.protocols.find((t) => t.id === 'jupiter-lend');
+          const kinds = [
+            earn.length ? `${earn.length} earn deposit${earn.length === 1 ? '' : 's'}` : null,
+            borrow.length ? `${borrow.length} borrow position${borrow.length === 1 ? '' : 's'}` : null,
+          ].filter(Boolean);
+          exposure.push({
+            protocol: 'jupiter-lend',
+            name: jupiter.name,
+            positions: earn.length + borrow.length,
+            positionKind: 'position',
+            positionLabel: kinds.join(', '),
+            accounts: [...borrow, ...earn].slice(0, 5),
+            trustScore: ts?.score ?? null,
+            tier: ts?.tier ?? 'unknown',
+            model: ts?.model ?? null,
+            threshold: ts?.threshold ?? null,
+            members: ts?.members ?? null,
+            timelockSeconds: ts?.timelockSeconds ?? null,
+          });
+        }
+      } catch (err: any) {
+        console.error('[wallet] jupiter lend check failed:', err?.message || err);
+        unchecked.push(jupiter.name);
       }
     }
 

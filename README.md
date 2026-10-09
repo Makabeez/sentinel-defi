@@ -71,18 +71,17 @@ The same DAO ran a third governance at a 10% quorum. That one priced out at 0.51
 
 ### 1. Governance trust scores
 
-Every monitored protocol gets a 0–100 score built from four factors:
+Every monitored protocol gets a 0–100 score read straight from chain state, re-checked every hour:
 
-- **Multisig configuration** — signer count and threshold
-- **Timelock duration** — how long admin changes take to land
-- **Audit history** — independent reviews on record
-- **Admin activity** — recent changes to governance parameters
+- **Who holds the upgrade key (45)** — immutable, Squads multisig (threshold and signer count resolved on-chain), or a single private key
+- **Timelock (30)** — how long an approved upgrade waits before it lands
+- **Recency (25)** — when the upgrade authority last acted
 
-Jupiter Lend scores 92/100 (4/7 multisig, 72h timelock, formally verified). Drift scored 8/100 at the moment of the exploit (2/5 multisig, zero timelock, compromised).
+Audits aren't scored because they aren't on-chain. Live scores are on [sentinel.baserep.xyz](https://sentinel.baserep.xyz); the watcher alerts when a threshold drops, a timelock is cut or the authority changes. Drift scored 8/100 at the moment of the exploit (2/5 multisig, zero timelock).
 
 ### 2. Wallet risk scanner
 
-Paste any Solana address to see which protocols you're exposed to, the governance score of each, your aggregate risk level, and the specific weaknesses in the protocols you actually use.
+Paste any Solana address to find its actual open positions — Kamino and Solend obligations, MarginFi and Drift accounts, Jupiter Lend earn deposits (jlTokens) and borrow positions (position NFTs) — and who can change the code each one sits in.
 
 ### 3. Real-time anomaly detection
 
@@ -172,13 +171,15 @@ The quorum requirement the scanner computes — 879,946,007,523 BONK — matches
 
 ## Protocols monitored
 
-| Protocol | Type | Trust score | Status |
-| --- | --- | --- | --- |
-| Jupiter Lend | Lending | 92/100 — Excellent | Active |
-| Kamino Finance | Lending | 88/100 — Excellent | Active |
-| Solend | Lending | 75/100 — Good | Active |
-| MarginFi | Lending | 72/100 — Good | Active |
-| Drift Protocol | Perp DEX | 8/100 — Critical | Frozen |
+| Protocol | Type | Upgrade control (on-chain, 9 Oct 2026) |
+| --- | --- | --- |
+| Kamino Finance | Lending | Squads 5/10, 24h timelock |
+| Jupiter Lend | Lending | Squads 4/7, 12h timelock |
+| Drift Protocol | Perp DEX | Squads 4/7, 1h timelock |
+| MarginFi | Lending | Squads 7/15, no timelock |
+| Solend | Lending | Single key, no timelock |
+
+Scores move with chain state, so they live on the dashboard rather than here.
 
 ## Run it locally
 

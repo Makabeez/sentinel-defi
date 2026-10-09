@@ -316,8 +316,8 @@ function Wallet({ trust }) {
         <div className="section-head">
           <h2>Check a wallet</h2>
           <p>
-            Paste an address to find its open positions on Kamino, Solend, MarginFi and Drift, and
-            who can change the code those positions sit in.
+            Paste an address to find its open positions on Kamino, Jupiter Lend, Solend, MarginFi
+            and Drift, and who can change the code those positions sit in.
           </p>
         </div>
 
@@ -374,8 +374,8 @@ function Wallet({ trust }) {
                           <h3 className="protocol-name">
                             {e.name}
                             <span className="tier tier-fair">
-                              {e.positions} {e.positionKind}
-                              {e.positions === 1 ? '' : 's'}
+                              {e.positionLabel ||
+                                `${e.positions} ${e.positionKind}${e.positions === 1 ? '' : 's'}`}
                             </span>
                           </h3>
                           <p className="protocol-sentence">{controlSentence(p)}</p>
@@ -395,7 +395,6 @@ function Wallet({ trust }) {
             {r.unchecked?.length > 0 && (
               <p className="footnote">Couldn’t check {r.unchecked.join(', ')} this time.</p>
             )}
-            <p className="footnote">Jupiter Lend positions aren’t checked yet.</p>
           </div>
         )}
       </div>

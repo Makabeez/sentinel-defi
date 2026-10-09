@@ -106,8 +106,33 @@ export const SNAPSHOT = {
     {
       "id": "jupiter-lend",
       "name": "Jupiter Lend",
-      "programId": null,
-      "error": "program ID not verified"
+      "programId": "jupeiUmn818Jg1ekPURTpr4mFo29p46vygyykFJ3wZC",
+      "score": 55,
+      "tier": "fair",
+      "model": "multisig",
+      "authority": "4MsgBB5VPoTrUSp5XnfbViV386C1UnsTdifLBw33ZMSJ",
+      "multisig": "J3mJ3wz6xkVUk3T8qHnuAYNxsRH3ixHsryYNZAU2vG8P",
+      "threshold": 4,
+      "members": 7,
+      "timelockSeconds": 43200,
+      "lastActivity": 1791303654,
+      "factors": [
+        {
+          "label": "Multisig (Squads v4 4/7)",
+          "points": 38,
+          "max": 45
+        },
+        {
+          "label": "12h timelock",
+          "points": 14,
+          "max": 30
+        },
+        {
+          "label": "Authority last used 6 Oct 2026",
+          "points": 3,
+          "max": 25
+        }
+      ]
     },
     {
       "id": "drift",
