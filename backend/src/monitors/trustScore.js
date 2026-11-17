@@ -504,11 +504,26 @@ function diffAgainst(previous, current) {
 // Delivery
 // ---------------------------------------------------------------------------
 
+// Telegram settings come from the repo-root .env (the file the API reads), so
+// rotating the bot token means editing one file. Values baked into the PM2
+// environment are only a fallback.
+function telegramConfig() {
+  let file = {};
+  try {
+    file = require('dotenv').parse(fs.readFileSync(path.join(__dirname, '../../../.env')));
+  } catch {
+    /* no .env */
+  }
+  return {
+    token: file.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN,
+    chat: file.TELEGRAM_CHAT_ID || process.env.TELEGRAM_CHAT_ID,
+  };
+}
+
 async function deliver(alert) {
   console.log(`[trust:${alert.severity}] ${alert.code} — ${alert.message}`);
 
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chat = process.env.TELEGRAM_CHAT_ID;
+  const { token, chat } = telegramConfig();
   if (token && chat) {
     try {
       await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {

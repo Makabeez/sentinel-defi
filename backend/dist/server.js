@@ -336,7 +336,7 @@ function computeCascadeRisk() {
 // ============================================
 // TELEGRAM ALERT BOT
 // ============================================
-const TELEGRAM_BOT_TOKEN = "8384781852:AAEhvRpQsPF6hV939Yxqhb0-Bm8uaOsy6JQ";
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const TELEGRAM_CHAT_ID = "476352360";
 const SEV_EMOJI = { critical: "🚨", high: "⚠️", medium: "🟡", low: "🔵", info: "ℹ️" };
 async function sendTelegramAlert(a) {

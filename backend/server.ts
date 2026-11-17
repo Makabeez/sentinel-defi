@@ -125,6 +125,13 @@ const PYTH_FEEDS: Record<string, string> = {
 };
 
 const PYTH_TWAP: Map<string, number[]> = new Map();
+const ORACLE_STALE_ALERT_S = Number(process.env.ORACLE_STALE_ALERT_S || 900);
+
+function formatAge(s: number): string {
+  if (s < 120) return `${s}s`;
+  if (s < 7200) return `${Math.round(s / 60)} min`;
+  return `${(s / 3600).toFixed(1)} h`;
+}
 // Pyth push oracle: sponsored price feed accounts on Solana (shard 0), continuously updated by Pyth
 const PYTH_PUSH_ORACLE = new PublicKey('pythWSnswVUd12oZpeFP8e9CVaEqJg25g1Vtc2biRsT');
 
@@ -169,9 +176,10 @@ async function fetchAllTVLs(): Promise<void> {
     const trimmed = history.filter(s => s.timestamp > cutoff);
     tvlHistory.set(proto.id, trimmed);
 
-    // ANOMALY: TVL drop > 10% in 1h
+    // ANOMALY: TVL drop > 10% / > 5% in 1h (one alert per drawdown, see raiseCondition)
+    const tvlKey = `tvl:${proto.id}`;
     if (snapshot.change1h < -10) {
-      pushAlert({
+      raiseCondition(tvlKey, {
         severity: 'critical',
         type: 'tvl_crash',
         protocol: proto.id,
@@ -180,7 +188,7 @@ async function fetchAllTVLs(): Promise<void> {
         data: snapshot,
       });
     } else if (snapshot.change1h < -5) {
-      pushAlert({
+      raiseCondition(tvlKey, {
         severity: 'high',
         type: 'tvl_drop',
         protocol: proto.id,
@@ -188,6 +196,8 @@ async function fetchAllTVLs(): Promise<void> {
         description: `Significant outflow detected. Current TVL: $${tvl.toLocaleString()}.`,
         data: snapshot,
       });
+    } else if (prev1h) {
+      clearCondition(tvlKey, `${proto.name} TVL outflow has stopped`);
     }
   }
 }
@@ -257,8 +267,9 @@ async function fetchPythPrices(): Promise<void> {
       oracleStatus.set(symbol, oracleData);
 
       // ANOMALY: Oracle deviation > 5% from TWAP
-      if (isDeviated && twapArr.length > 10) {
-        pushAlert({
+      const devKey = `oracle_deviation:${symbol}`;
+      if (isDeviated && twapArr.length >= 10) {
+        raiseCondition(devKey, {
           severity: 'critical',
           type: 'oracle_deviation',
           protocol: 'system',
@@ -266,18 +277,26 @@ async function fetchPythPrices(): Promise<void> {
           description: `Current: $${price.toFixed(4)} | TWAP(5m): $${twapAvg.toFixed(4)}. Potential oracle manipulation or flash crash.`,
           data: oracleData,
         });
+      } else if (!isDeviated) {
+        clearCondition(devKey, `${symbol} oracle back in line with its TWAP`);
       }
 
-      // ANOMALY: Stale oracle
-      if (isStale) {
-        pushAlert({
+      // ANOMALY: Stale oracle. The dashboard marks a feed stale after 2 min;
+      // a notification needs ORACLE_STALE_ALERT_S (default 15 min) so a slow
+      // heartbeat doesn't page anyone.
+      const ageS = Math.round(Date.now() / 1000 - publishTime);
+      const staleKey = `oracle_stale:${symbol}`;
+      if (ageS > ORACLE_STALE_ALERT_S) {
+        raiseCondition(staleKey, {
           severity: 'high',
           type: 'oracle_stale',
           protocol: 'system',
-          title: `${symbol} oracle is stale (${Math.round(Date.now() / 1000 - publishTime)}s old)`,
-          description: `Price feed hasn't updated in over 60 seconds. Liquidation engines may be using outdated data.`,
+          title: `${symbol} oracle is stale (${formatAge(ageS)} old)`,
+          description: `Pyth's sponsored ${symbol} feed on Solana hasn't updated for ${formatAge(ageS)}. Protocols reading this account get an old price.`,
           data: oracleData,
         });
+      } else if (!isStale) {
+        clearCondition(staleKey, `${symbol} oracle is updating again`);
       }
     }
   } catch (err: any) {
@@ -420,26 +439,68 @@ function computeCascadeRisk(): any {
 // ============================================
 // TELEGRAM ALERT BOT
 // ============================================
-const TELEGRAM_BOT_TOKEN = "8384781852:AAEhvRpQsPF6hV939Yxqhb0-Bm8uaOsy6JQ";
-const TELEGRAM_CHAT_ID = "476352360";
+// Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env (never in code: this repo is public).
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
+const DASHBOARD_URL = process.env.DASHBOARD_URL || 'https://sentinel.baserep.xyz';
 const SEV_EMOJI: Record<string, string> = { critical: "🚨", high: "⚠️", medium: "🟡", low: "🔵", info: "ℹ️" };
+if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) console.warn('[TELEGRAM] TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set, alerts stay on the dashboard only');
 
-async function sendTelegramAlert(a: Alert): Promise<void> {
-  if (a.severity !== "critical" && a.severity !== "high") return;
-  const msg = `${SEV_EMOJI[a.severity] || "📢"} *SENTINEL ALERT*\n\n*${a.severity.toUpperCase()}* | ${a.protocol}\n*${a.title}*\n\n${a.description}\n\n🕐 ${new Date(a.timestamp).toLocaleString()}\n🔗 [Dashboard](https://frontend-eta-topaz-85.vercel.app)`;
+async function sendTelegram(text: string): Promise<boolean> {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return false;
   try {
-    await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, { chat_id: TELEGRAM_CHAT_ID, text: msg, parse_mode: "Markdown", disable_web_page_preview: true });
-    console.log(`[TELEGRAM] Alert sent: ${a.title}`);
-  } catch (err: any) { console.error("[TELEGRAM] Error:", err.message); }
+    await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, { chat_id: TELEGRAM_CHAT_ID, text, parse_mode: "Markdown", disable_web_page_preview: true });
+    return true;
+  } catch (err: any) { console.error("[TELEGRAM] Error:", err.message); return false; }
+}
+
+async function sendTelegramAlert(a: Alert, reminder = false): Promise<void> {
+  if (a.severity !== "critical" && a.severity !== "high") return;
+  const head = reminder ? `${SEV_EMOJI[a.severity] || "📢"} *STILL ONGOING*` : `${SEV_EMOJI[a.severity] || "📢"} *SENTINEL ALERT*`;
+  const msg = `${head}\n\n*${a.severity.toUpperCase()}* | ${a.protocol}\n*${a.title}*\n\n${a.description}\n\n🕐 ${new Date(a.timestamp).toLocaleString()}\n🔗 [Dashboard](${DASHBOARD_URL})`;
+  if (await sendTelegram(msg)) console.log(`[TELEGRAM] Alert sent: ${a.title}`);
+}
+
+// Ongoing conditions (a stale feed, a TVL drawdown) notify once when they
+// start, remind every ALERT_REMIND_MS while they last, and send one message
+// when they clear. Without this, a feed that stays stale for a day pages
+// every five minutes.
+const ALERT_REMIND_MS = Number(process.env.ALERT_REMIND_MS || 6 * 3600_000);
+const SEV_RANK: Record<string, number> = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
+const conditions: Map<string, { since: number; lastSent: number; severity: string; title: string }> = new Map();
+
+function raiseCondition(key: string, partial: Omit<Alert, 'id' | 'timestamp'>): void {
+  const now = Date.now();
+  const cur = conditions.get(key);
+  const escalated = cur && SEV_RANK[partial.severity] > SEV_RANK[cur.severity];
+  if (cur && !escalated && now - cur.lastSent < ALERT_REMIND_MS) return;
+  conditions.set(key, { since: cur?.since ?? now, lastSent: now, severity: partial.severity, title: partial.title });
+  pushAlert(partial, { managed: true, reminder: !!cur && !escalated });
+}
+
+function clearCondition(key: string, recovered: string): void {
+  const cur = conditions.get(key);
+  if (!cur) return;
+  conditions.delete(key);
+  const mins = Math.round((Date.now() - cur.since) / 60000);
+  const lasted = mins < 120 ? `${mins} min` : `${(mins / 60).toFixed(1)} h`;
+  pushAlert({ severity: 'info', type: 'recovered', protocol: 'system', title: `${recovered} (after ${lasted})`, description: `Resolved: ${cur.title}` }, { managed: true });
+  sendTelegram(`✅ *RESOLVED* | ${recovered}\nLasted ${lasted}.\n🔗 [Dashboard](${DASHBOARD_URL})`);
 }
 
 // ============================================
-function pushAlert(partial: Omit<Alert, 'id' | 'timestamp'>): void {
-  // Deduplicate: don't push same type+protocol within 5 min
-  const recent = alerts.find(
-    a => a.type === partial.type && a.protocol === partial.protocol && Date.now() - a.timestamp < 300000
-  );
-  if (recent) return;
+function pushAlert(
+  partial: Omit<Alert, 'id' | 'timestamp'>,
+  opts: { managed?: boolean; reminder?: boolean } = {}
+): void {
+  // One-off events: don't push the same type+protocol within 5 min.
+  // Ongoing conditions are throttled by raiseCondition instead.
+  if (!opts.managed) {
+    const recent = alerts.find(
+      a => a.type === partial.type && a.protocol === partial.protocol && Date.now() - a.timestamp < 300000
+    );
+    if (recent) return;
+  }
 
   const alert: Alert = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -452,7 +513,7 @@ function pushAlert(partial: Omit<Alert, 'id' | 'timestamp'>): void {
 
   // Broadcast to WebSocket clients
   broadcast({ type: "alert", data: alert });
-  sendTelegramAlert(alert);
+  sendTelegramAlert(alert, opts.reminder);
 
   console.log(`[ALERT][${alert.severity.toUpperCase()}] ${alert.title}`);
 }
