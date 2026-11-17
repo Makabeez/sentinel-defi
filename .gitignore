@@ -8,3 +8,4 @@ sentinel-v3/
 .sentinel-trust-state.json
 .sentinel-squads-cache.json
 .sentinel-trust-scores.json
+.sentinel-alert-state.json

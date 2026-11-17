@@ -89,7 +89,7 @@ Paste any Solana address to find its actual open positions — Kamino and Solend
 - **TVL crashes** — cross-protocol via DefiLlama (caught Jupiter Lend −8.5% in one hour)
 - **Funding rate extremes** — Binance/Bybit SOL funding as a cascade signal
 - **Governance changes** — admin account data writes, timelock edits, multisig rotations
-- **Telegram alerts** — critical and high severity pushed instantly
+- **Telegram alerts** — critical and high severity pushed instantly, once per incident: a problem that persists gets at most two reminders (6h apart), then one message when it resolves. Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`
 
 ### 4. Hack replay
 

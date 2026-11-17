@@ -462,26 +462,72 @@ async function sendTelegramAlert(a: Alert, reminder = false): Promise<void> {
 }
 
 // Ongoing conditions (a stale feed, a TVL drawdown) notify once when they
-// start, remind every ALERT_REMIND_MS while they last, and send one message
-// when they clear. Without this, a feed that stays stale for a day pages
-// every five minutes.
+// start, remind every ALERT_REMIND_MS while they last (at most
+// ALERT_MAX_REMINDERS times, then go quiet), and send one message when they
+// clear. A worse severity always notifies. State is kept on disk so a restart
+// or reboot doesn't re-send alerts for problems you already know about.
 const ALERT_REMIND_MS = Number(process.env.ALERT_REMIND_MS || 6 * 3600_000);
+const ALERT_MAX_REMINDERS = Number(process.env.ALERT_MAX_REMINDERS || 2);
+const ALERT_STATE_PATH = process.env.ALERT_STATE_PATH || path.join(__dirname, '.sentinel-alert-state.json');
 const SEV_RANK: Record<string, number> = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
-const conditions: Map<string, { since: number; lastSent: number; severity: string; title: string }> = new Map();
+
+interface Condition {
+  since: number;
+  lastSent: number;
+  severity: string;
+  title: string;
+  reminders: number;
+  muted: boolean;
+}
+
+const conditions: Map<string, Condition> = new Map();
+try {
+  const saved = JSON.parse(fs.readFileSync(ALERT_STATE_PATH, 'utf8'));
+  for (const [k, v] of Object.entries(saved)) conditions.set(k, { reminders: 0, muted: false, ...(v as any) });
+  if (conditions.size) console.log(`[ALERT] restored ${conditions.size} ongoing condition(s)`);
+} catch {
+  /* first run */
+}
+
+function saveConditions(): void {
+  try {
+    fs.writeFileSync(ALERT_STATE_PATH, JSON.stringify(Object.fromEntries(conditions), null, 2));
+  } catch (err: any) {
+    console.warn(`[ALERT] could not save state: ${err.message}`);
+  }
+}
 
 function raiseCondition(key: string, partial: Omit<Alert, 'id' | 'timestamp'>): void {
   const now = Date.now();
   const cur = conditions.get(key);
-  const escalated = cur && SEV_RANK[partial.severity] > SEV_RANK[cur.severity];
-  if (cur && !escalated && now - cur.lastSent < ALERT_REMIND_MS) return;
-  conditions.set(key, { since: cur?.since ?? now, lastSent: now, severity: partial.severity, title: partial.title });
-  pushAlert(partial, { managed: true, reminder: !!cur && !escalated });
+
+  if (!cur || SEV_RANK[partial.severity] > SEV_RANK[cur.severity]) {
+    conditions.set(key, { since: cur?.since ?? now, lastSent: now, severity: partial.severity, title: partial.title, reminders: 0, muted: false });
+    saveConditions();
+    pushAlert(partial, { managed: true });
+    return;
+  }
+
+  if (cur.muted || now - cur.lastSent < ALERT_REMIND_MS) return;
+  cur.reminders += 1;
+  cur.lastSent = now;
+  cur.title = partial.title;
+  const last = cur.reminders >= ALERT_MAX_REMINDERS;
+  if (last) cur.muted = true;
+  saveConditions();
+  pushAlert(
+    last
+      ? { ...partial, description: `${partial.description}\n\nNo more reminders for this one. You'll get a message when it resolves.` }
+      : partial,
+    { managed: true, reminder: true }
+  );
 }
 
 function clearCondition(key: string, recovered: string): void {
   const cur = conditions.get(key);
   if (!cur) return;
   conditions.delete(key);
+  saveConditions();
   const mins = Math.round((Date.now() - cur.since) / 60000);
   const lasted = mins < 120 ? `${mins} min` : `${(mins / 60).toFixed(1)} h`;
   pushAlert({ severity: 'info', type: 'recovered', protocol: 'system', title: `${recovered} (after ${lasted})`, description: `Resolved: ${cur.title}` }, { managed: true });
